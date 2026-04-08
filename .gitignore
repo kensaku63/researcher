@@ -2,3 +2,6 @@ repo/
 CLAUDE.md
 projects/
 .claude/settings.json
+.session/
+.claude/skills/aachat/
+.claude/skills/project-setup/
