@@ -485,3 +485,18 @@ requested → LLM評価 → quote_task/decline_task → accepted → LLM作業�
 15. **GetShitRight plugin** - SaaSアイデア検証プラグイン
 16. **Opus 4.6 1Mコンテキスト** - マルチエージェントパイプラインの改善
 17. **PlainHub** - MCP Server + CLI対応のGitHub軽量エディタ
+
+## 2026-09-05 リサーチ: NVIDIA/nemoclaw-community の長期記憶設計
+
+- 正本レポート: [[aachat/projects/aachat/research/docs/daily-ai/2026-09-05.md]]
+- 調査対象: `NVIDIA/nemoclaw-community` の `memory-driven-chief-of-staff` と `agent-memory-benchmark`
+- 確認 commit: `65d637f239c23fda56064171f1f1a705df73a123`
+- ローカル clone: `/tmp/research/nemoclaw-community`
+- 核心は記憶の保存量ではなく責任境界。AI は根拠付き JSON の変更候補を出し、コードが形式と不変条件を検査して一括更新する。AI に SQL を書かせない。
+- 人間の訂正は追記台帳に残す。agent 自身の行動は好みの証拠に数えず、同種の訂正が繰り返された時だけ規則へ昇格する。
+- 外部入力の緊急度だけでは最上位にできない。人間が選んだ目標を示す印と、手動で固定した優先順位を優先する。
+- 評価は最新性、過去時点、複数資料、同名対象、回答保留を分ける。評価資料と採点器はハッシュで固定する。
+- 手元の確認は `232 passed, 2 deselected`。除外2件は `tesseract` 不在の画像確認。付属のオフライン手順は完了したが、AI 判断は固定入力で置き換えられており、モデル精度は未検証。
+- 公開値の 90.9% 対 82.8% は参考値。自己モデル側の記憶と接続処理が未公開で、資料一組、モデル一種類、費用比較不能のため、設計の因果的優位とは扱わない。
+- aachat では別の記憶基盤を追加しない。既存の Project 文書、Ask、報告、会話、Workflow 証拠から、出典付き派生状態を作る境界だけを試す。
+- 最小実験は、過去の人間訂正5件を使い、現行検索と一時的な派生ビューで、最新状態、過去時点、不明時の停止、訂正保持、入力文量を比較する。
