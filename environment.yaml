@@ -1,0 +1,11 @@
+name: default
+description: Minimal paper, YouTube and X search with Python standard library
+config:
+  packages:
+    apt: [python3]
+    brew: [python]
+  env:
+    - name: YOUTUBE_API_KEY
+      purpose: YouTube Data API v3 search
+    - name: X_BEARER_TOKEN
+      purpose: X API v2 recent post search
