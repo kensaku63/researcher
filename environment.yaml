@@ -1,11 +1,46 @@
+---
 name: default
-description: Minimal paper, YouTube and X search with Python standard library
+description: Paper, YouTube and X research skills imported from source repositories
 config:
   packages:
-    apt: [python3]
-    brew: [python]
+    apt:
+    - python3
+    - jq
+    - ffmpeg
+    brew:
+    - python
+    - ffmpeg
+    - jq
+    pip:
+    - paper-search-mcp @ git+https://github.com/openags/paper-search-mcp.git
+    - yt-dlp
+    - openai
+    - requests
+    - python-dateutil
+    - pydantic
+    - google-api-python-client
+    - pytrends
+    npm:
+    - "@steipete/bird"
   env:
-    - name: YOUTUBE_API_KEY
-      purpose: YouTube Data API v3 search
-    - name: X_BEARER_TOKEN
-      purpose: X API v2 recent post search
+  - name: PAPER_SEARCH_MCP_UNPAYWALL_EMAIL
+    purpose: Unpaywall API courtesy email (improves OA / fulltext detection)
+  - name: PAPER_SEARCH_MCP_CORE_API_KEY
+    purpose: CORE API key (recommended — increases recall on open-access corpora)
+  - name: PAPER_SEARCH_MCP_SEMANTIC_SCHOLAR_API_KEY
+    purpose: Semantic Scholar API key (optional — relaxes rate limits)
+  - name: YOUTUBE_API_KEY
+    purpose: YouTube Data API access for search, video metrics, channel metrics, and
+      comments
+  - name: OPENAI_API_KEY
+    purpose: OpenAI speech-to-text fallback for YouTube videos without captions
+  - name: AUTH_TOKEN
+    purpose: X web cookie auth token for bird CLI. Required with CT0 when using bird
+      search, trend, expand, account, or bookmarks.
+  - name: CT0
+    purpose: X csrf cookie for bird CLI. Required with AUTH_TOKEN when using bird.
+  - name: X_BEARER_TOKEN
+    purpose: X API v2 bearer token for recent search, counts, lookup, and API fallback
+      collection.
+  networking:
+    type: unrestricted

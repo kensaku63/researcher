@@ -1,0 +1,32 @@
+# Japanese spam / low-signal phrase dictionary for x-search.
+# 1 line = 1 phrase. Lines starting with `#` are comments.
+# Matched case-insensitive, substring match in tweet text.
+# Editable. Keep entries narrow so they don't false-positive on legitimate posts.
+
+拡散希望
+拡散RT
+拡散希望RT
+いいねRT
+いいね&RT
+フォロバ
+フォロバ100
+フォロバ100%
+相互フォロー
+相互希望
+フォロワー増やしたい
+副業
+副業募集
+DM下さい
+DMください
+DM待ってます
+アフィ
+アフィリエイト
+おすすめ垢
+おすすめアカウント
+プレゼント企画
+無料プレゼント
+ICO
+NFT配布
+エアドロップ
+出会い
+出会いたい

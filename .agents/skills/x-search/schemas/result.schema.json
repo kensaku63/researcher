@@ -1,0 +1,398 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/aachat/x-research-expert/.agents/skills/x-search/schemas/result.schema.json",
+  "title": "x-search result",
+  "description": "Structured result of x-search/scripts/search.py. Common across subcommands (search, expand, account, counts, lookup, trend, diagnose).",
+  "type": "object",
+  "required": [
+    "platform",
+    "tool",
+    "fetched_at",
+    "items",
+    "queries_tried",
+    "limitations"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "platform": {
+      "type": "string",
+      "const": "x"
+    },
+    "tool": {
+      "type": "string",
+      "enum": [
+        "diagnose",
+        "search",
+        "expand",
+        "account",
+        "counts",
+        "lookup",
+        "trend",
+        "graph"
+      ]
+    },
+    "purpose": {
+      "type": ["string", "null"],
+      "enum": [
+        "market_research",
+        "competitor_research",
+        "trend_discovery",
+        "influencer_discovery",
+        "content_planning",
+        "social_marketing_research",
+        null
+      ]
+    },
+    "language": {
+      "type": ["string", "null"]
+    },
+    "region": {
+      "type": ["string", "null"]
+    },
+    "period": {
+      "type": ["string", "null"],
+      "description": "Relative (24h, 7d, 30d, 90d) or absolute (YYYY-MM-DD..YYYY-MM-DD)."
+    },
+    "fetched_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "credentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bird", "x_api"],
+      "properties": {
+        "bird": {
+          "type": "object",
+          "required": ["available"],
+          "additionalProperties": true,
+          "properties": {
+            "available": { "type": "boolean" },
+            "checked_at": { "type": ["string", "null"], "format": "date-time" },
+            "user": { "type": ["string", "null"] },
+            "reason": { "type": ["string", "null"] }
+          }
+        },
+        "x_api": {
+          "type": "object",
+          "required": ["available"],
+          "additionalProperties": true,
+          "properties": {
+            "available": { "type": "boolean" },
+            "checked_at": { "type": ["string", "null"], "format": "date-time" },
+            "reason": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+    "queries_built": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bird":  { "type": ["string", "null"] },
+        "x_api": { "type": ["string", "null"] },
+        "differences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["field"],
+            "additionalProperties": true,
+            "properties": {
+              "field": { "type": "string" },
+              "bird":  { "type": "string" },
+              "x_api": { "type": "string" }
+            }
+          }
+        },
+        "recommended_excludes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["term", "reason", "evidence_count"],
+            "additionalProperties": false,
+            "properties": {
+              "term": { "type": "string" },
+              "reason": {
+                "type": "string",
+                "enum": ["off_topic", "spam_phrase", "dictionary_hit"]
+              },
+              "evidence_count": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    },
+    "queries_tried": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["stage", "tool", "query"],
+        "additionalProperties": true,
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": ["discovery", "collection", "single", "lookup", "diagnose"]
+          },
+          "tool": {
+            "type": "string",
+            "enum": ["bird", "x_api", "web"]
+          },
+          "query": { "type": "string" },
+          "result_count": { "type": "integer", "minimum": 0 },
+          "elapsed_ms": { "type": "integer", "minimum": 0 },
+          "next_token": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_id", "provenance"],
+        "additionalProperties": true,
+        "properties": {
+          "url": { "type": ["string", "null"], "format": "uri" },
+          "source_id": { "type": "string" },
+          "author": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "name": { "type": ["string", "null"] },
+              "handle": { "type": ["string", "null"] },
+              "url": { "type": ["string", "null"], "format": "uri" },
+              "source": { "type": ["string", "null"], "description": "Posting client name (X API source field). null for bird." },
+              "followers": { "type": ["integer", "null"], "minimum": 0 },
+              "verified": { "type": ["boolean", "null"] },
+              "quality": { "type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "Internal author_quality score." }
+            }
+          },
+          "published_at": { "type": ["string", "null"], "format": "date-time" },
+          "text": { "type": ["string", "null"] },
+          "metrics": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "likes": { "type": ["integer", "null"], "minimum": 0 },
+              "reposts": { "type": ["integer", "null"], "minimum": 0 },
+              "replies": { "type": ["integer", "null"], "minimum": 0 },
+              "quotes": { "type": ["integer", "null"], "minimum": 0 },
+              "views": { "type": ["integer", "null"], "minimum": 0 }
+            }
+          },
+          "matched_terms": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "why_selected": { "type": ["string", "null"] },
+          "provenance": {
+            "type": "object",
+            "required": ["tool", "fetched_at"],
+            "additionalProperties": false,
+            "properties": {
+              "tool": {
+                "type": "string",
+                "enum": ["bird", "x_api", "web"]
+              },
+              "stage": {
+                "type": ["string", "null"],
+                "enum": ["discovery", "collection", "single", "lookup", "diagnose", null]
+              },
+              "fetched_at": { "type": "string", "format": "date-time" }
+            }
+          },
+          "limitations": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "counts": {
+      "type": ["array", "null"],
+      "description": "For `counts` subcommand. Time series of post counts.",
+      "items": {
+        "type": "object",
+        "required": ["start", "end", "count"],
+        "additionalProperties": false,
+        "properties": {
+          "start": { "type": "string", "format": "date-time" },
+          "end":   { "type": "string", "format": "date-time" },
+          "count": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "trends": {
+      "type": ["array", "null"],
+      "description": "For `trend` subcommand. Topic candidates from bird news/trending.",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": true,
+        "properties": {
+          "name": { "type": "string" },
+          "url":  { "type": ["string", "null"], "format": "uri" },
+          "volume": { "type": ["integer", "null"], "minimum": 0 },
+          "category": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "excluded_summary": {
+      "type": "object",
+      "required": ["total_excluded", "by_reason"],
+      "additionalProperties": false,
+      "properties": {
+        "total_excluded": { "type": "integer", "minimum": 0 },
+        "by_reason": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["code", "count"],
+            "additionalProperties": true,
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "duplicate_source_id",
+                  "near_duplicate",
+                  "too_short",
+                  "link_only",
+                  "hashtag_stuffing",
+                  "no_matched_terms",
+                  "spam_phrase",
+                  "automated_source",
+                  "quoted_only_noise",
+                  "language_mismatch",
+                  "low_author_quality",
+                  "engagement_anomaly",
+                  "same_author_limit"
+                ]
+              },
+              "count": { "type": "integer", "minimum": 0 },
+              "cluster_count": { "type": "integer", "minimum": 0 },
+              "matched_terms": { "type": "array", "items": { "type": "string" } },
+              "matched_sources": { "type": "array", "items": { "type": "string" } },
+              "sample_ids": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "x_api_post_reads": { "type": "integer", "minimum": 0 },
+        "bird_calls": { "type": "integer", "minimum": 0 },
+        "cached_hits": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "search_quality": {
+      "type": ["object", "null"],
+      "description": "Optional quality signals for deciding the next search strategy. Null when the script cannot infer them.",
+      "additionalProperties": false,
+      "properties": {
+        "coverage_score": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "How broadly accepted items cover the intended search axes."
+        },
+        "diversity_score": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Diversity of authors, URLs, post types, and conversation clusters."
+        },
+        "novelty_score": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Novelty against an existing report when prior report context is available."
+        },
+        "contradiction_count": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Count of accepted items that may weaken or contradict a current hypothesis."
+        },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Short factual observations useful for the next query plan."
+        }
+      }
+    },
+    "next_query_candidates": {
+      "type": "array",
+      "description": "Optional candidate query adjustments for the next x-search-plan turn.",
+      "items": {
+        "type": "object",
+        "required": ["kind", "reason", "expected_observation"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["broaden", "narrow", "validate", "contradict", "expand"]
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why this candidate should be tried next, grounded in the current result."
+          },
+          "suggested_fields": {
+            "type": "object",
+            "description": "Structured x-search fields to consider. Values mirror CLI options such as keywords, any_of, exclude, period, and exclude_types.",
+            "additionalProperties": true
+          },
+          "expected_observation": {
+            "type": "string",
+            "description": "What observation would make this query useful."
+          }
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "message", "recoverable"],
+        "additionalProperties": true,
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "BIRD_AUTH_MISSING",
+              "BIRD_AUTH_EXPIRED",
+              "BIRD_QUERY_ID_STALE",
+              "BIRD_RATE_LIMITED",
+              "BIRD_FEATURE_NOT_SUPPORTED",
+              "BIRD_NOT_INSTALLED",
+              "BIRD_UNEXPECTED_ERROR",
+              "API_TOKEN_MISSING",
+              "API_UNAUTHORIZED",
+              "API_FORBIDDEN",
+              "API_RATE_LIMITED",
+              "API_QUOTA_EXCEEDED",
+              "API_FULL_ARCHIVE_NOT_AVAILABLE",
+              "API_UNEXPECTED_ERROR",
+              "QUERY_TOO_BROAD",
+              "RESULTS_INSUFFICIENT",
+              "BUDGET_NOT_APPLICABLE",
+              "INVALID_INPUT",
+              "API_RECENT_WINDOW_UNSUPPORTED",
+              "GRAPH_PARTIAL_COVERAGE"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": ["diagnose", "discovery", "collection", "expand", "account", "counts", "lookup", "trend", "graph", "global"]
+          },
+          "message": { "type": "string" },
+          "recoverable": { "type": "boolean" }
+        }
+      }
+    },
+    "next_human_actions": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

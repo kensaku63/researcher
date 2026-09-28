@@ -1,0 +1,61 @@
+[
+  {
+    "repository": "https://github.com/kensaku63/paper-search",
+    "commit": "cb6e6b25cdf68e46bb4be114c2c389f52872f9e4",
+    "files": [
+      ".agents/skills/paper-search/SKILL.md"
+    ]
+  },
+  {
+    "repository": "https://github.com/kensaku63/youtube-research",
+    "commit": "ab6f409502d9eeab68e1f029aae7d152be5a3d02",
+    "files": [
+      ".agents/skills/README.md",
+      ".agents/skills/youtube-search-report/SKILL.md",
+      ".agents/skills/youtube-search-insight/SKILL.md",
+      ".agents/skills/youtube-search-plan/SKILL.md",
+      ".agents/skills/youtube-search/SKILL.md",
+      ".agents/skills/youtube-transcript/SKILL.md",
+      ".agents/skills/youtube-search-report/examples/report.md",
+      ".agents/skills/youtube-search-report/templates/fact-report.md",
+      ".agents/skills/youtube-search-insight/examples/insight-report.md",
+      ".agents/skills/youtube-search-insight/templates/insight-report.md",
+      ".agents/skills/youtube-search/schemas/result.schema.json",
+      ".agents/skills/youtube-search/examples/result.json",
+      ".agents/skills/youtube-search/scripts/search.py",
+      ".agents/skills/youtube-transcript/references/youtube-transcript-notes.md",
+      ".agents/skills/youtube-transcript/agents/openai.yaml",
+      ".agents/skills/youtube-transcript/scripts/youtube_transcript.py",
+      "knowledge/youtube-auto-caption-rolling-duplicates.md"
+    ]
+  },
+  {
+    "repository": "https://github.com/kensaku63/x-research-expert2",
+    "commit": "198227b11f04bc4f841c7a5a12fa88d30b564154",
+    "files": [
+      ".agents/skills/x-bookmark-deep-research/SKILL.md",
+      ".agents/skills/x-search-plan/SKILL.md",
+      ".agents/skills/x-search-report/SKILL.md",
+      ".agents/skills/x-search/SKILL.md",
+      ".agents/skills/x-search-insight/SKILL.md",
+      ".agents/skills/x-bookmark-deep-research/examples/report.md",
+      ".agents/skills/x-bookmark-deep-research/scripts/bookmarks.py",
+      ".agents/skills/x-search-report/examples/report.md",
+      ".agents/skills/x-search-report/templates/_template.md",
+      ".agents/skills/x-search/schemas/result.schema.json",
+      ".agents/skills/x-search/knowledge/automated-sources.txt",
+      ".agents/skills/x-search/knowledge/noise-phrases.ja.txt",
+      ".agents/skills/x-search/knowledge/noise-phrases.en.txt",
+      ".agents/skills/x-search/examples/result.json",
+      ".agents/skills/x-search/scripts/_normalize.py",
+      ".agents/skills/x-search/scripts/__init__.py",
+      ".agents/skills/x-search/scripts/_x_api.py",
+      ".agents/skills/x-search/scripts/search.py",
+      ".agents/skills/x-search/scripts/_bird.py",
+      ".agents/skills/x-search/scripts/_noise.py",
+      ".agents/skills/x-search/scripts/_query_builder.py",
+      ".agents/skills/x-search-insight/examples/insight-report.md",
+      ".agents/skills/x-search-insight/templates/insight-report.md"
+    ]
+  }
+]

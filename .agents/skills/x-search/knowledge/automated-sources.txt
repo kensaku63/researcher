@@ -1,0 +1,18 @@
+# Automated posting client names matched against author.source (X API only).
+# 1 line = 1 source label. Case-insensitive exact match.
+# Comments start with `#`.
+
+Buffer
+IFTTT
+Hootsuite
+SocialDog
+TweetDeck Web App
+Twitter for Advertisers
+dlvr.it
+Zapier
+Crowdfire
+MeetEdgar
+Tweet Scheduler
+Statusbrew
+Bot
+Twibot

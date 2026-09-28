@@ -1,0 +1,197 @@
+{
+  "platform": "x",
+  "tool": "search",
+  "purpose": "trend_discovery",
+  "language": "ja",
+  "region": "JP",
+  "period": "7d",
+  "fetched_at": "2026-05-21T10:00:00+00:00",
+  "credentials": {
+    "bird": {
+      "available": true,
+      "checked_at": "2026-05-21T10:00:00+00:00",
+      "user": "@example_marketer",
+      "reason": null
+    },
+    "x_api": {
+      "available": false,
+      "checked_at": "2026-05-21T10:00:00+00:00",
+      "reason": "api_unauthorized"
+    }
+  },
+  "queries_built": {
+    "bird": "(\"生成AI\" OR \"LLM\") (勉強法 OR 学習) lang:ja -求人 -採用 -is:retweet",
+    "x_api": "(\"生成AI\" OR \"LLM\") (勉強法 OR 学習) lang:ja -求人 -採用 -is:retweet",
+    "differences": [
+      { "field": "period", "bird": "post-fetch filter", "x_api": "start_time/end_time params" }
+    ],
+    "recommended_excludes": [
+      { "term": "拡散希望", "reason": "dictionary_hit", "evidence_count": 9 }
+    ]
+  },
+  "queries_tried": [
+    {
+      "stage": "discovery",
+      "tool": "bird",
+      "query": "(\"生成AI\" OR \"LLM\") (勉強法 OR 学習) lang:ja -求人 -採用 -is:retweet",
+      "result_count": 18,
+      "elapsed_ms": 1240
+    }
+  ],
+  "items": [
+    {
+      "url": "https://x.com/ai_learner_jp/status/1820000000000000001",
+      "source_id": "1820000000000000001",
+      "author": {
+        "name": "AIラーナー",
+        "handle": "@ai_learner_jp",
+        "url": "https://x.com/ai_learner_jp",
+        "source": null,
+        "followers": 4280,
+        "verified": false,
+        "quality": null
+      },
+      "published_at": "2026-05-20T12:34:00+00:00",
+      "text": "生成AIの勉強法、結局は『毎日1本記事を写経して、自分の業務に置き換えて書き直す』のが一番ワークした。Promptの形が体に染み込む感じ。LLMの内部理解は後からでいい。",
+      "metrics": {
+        "likes": 312,
+        "reposts": 41,
+        "replies": 28,
+        "quotes": 6,
+        "views": 18400
+      },
+      "matched_terms": ["生成AI", "勉強法", "LLM"],
+      "why_selected": "直近期間内で likes=312、返信=28 で会話継続",
+      "provenance": {
+        "tool": "bird",
+        "stage": "discovery",
+        "fetched_at": "2026-05-21T10:00:01+00:00"
+      },
+      "limitations": []
+    },
+    {
+      "url": "https://x.com/promptopsmag/status/1820000000000000002",
+      "source_id": "1820000000000000002",
+      "author": {
+        "name": "PromptOps Magazine",
+        "handle": "@promptopsmag",
+        "url": "https://x.com/promptopsmag",
+        "source": null,
+        "followers": 19850,
+        "verified": false,
+        "quality": null
+      },
+      "published_at": "2026-05-19T22:10:00+00:00",
+      "text": "LLM の学習、本買って読むより『現場の prompt log を 100 本添削する』ほうが速い。なぜ動かなかったかを言語化する筋力がつく。生成AI を業務化したいなら座学はあとで良い。",
+      "metrics": {
+        "likes": 198,
+        "reposts": 22,
+        "replies": 14,
+        "quotes": 3,
+        "views": 11200
+      },
+      "matched_terms": ["LLM", "生成AI", "学習"],
+      "why_selected": "直近期間内で likes=198、返信=14 で会話継続",
+      "provenance": {
+        "tool": "bird",
+        "stage": "discovery",
+        "fetched_at": "2026-05-21T10:00:02+00:00"
+      },
+      "limitations": []
+    },
+    {
+      "url": "https://x.com/sasaki_eng/status/1820000000000000003",
+      "source_id": "1820000000000000003",
+      "author": {
+        "name": "ササキ (LLM 業務化)",
+        "handle": "@sasaki_eng",
+        "url": "https://x.com/sasaki_eng",
+        "source": null,
+        "followers": 9320,
+        "verified": false,
+        "quality": null
+      },
+      "published_at": "2026-05-18T07:48:00+00:00",
+      "text": "生成AIの勉強法で『動画より公式 docs を写経』派になった。LLM の挙動はパラメータと temperature を変えながら 10 回試す方が、本一冊読むより身につく。",
+      "metrics": {
+        "likes": 156,
+        "reposts": 18,
+        "replies": 11,
+        "quotes": 2,
+        "views": 9800
+      },
+      "matched_terms": ["生成AI", "勉強法", "LLM"],
+      "why_selected": "直近期間内で likes=156、返信=11 で会話継続",
+      "provenance": {
+        "tool": "bird",
+        "stage": "discovery",
+        "fetched_at": "2026-05-21T10:00:03+00:00"
+      },
+      "limitations": []
+    }
+  ],
+  "excluded_summary": {
+    "total_excluded": 15,
+    "by_reason": [
+      { "code": "duplicate_source_id", "count": 1 },
+      { "code": "near_duplicate", "count": 4, "cluster_count": 2 },
+      { "code": "too_short", "count": 3 },
+      { "code": "spam_phrase", "count": 5, "matched_terms": ["拡散希望", "フォロバ", "DM下さい"] },
+      { "code": "hashtag_stuffing", "count": 2 }
+    ]
+  },
+  "search_quality": {
+    "coverage_score": 0.66,
+    "diversity_score": 0.72,
+    "novelty_score": null,
+    "contradiction_count": 0,
+    "notes": [
+      "採用投稿は実践的な学習方法に偏っており、反証語彙を含む投稿は未取得",
+      "author は分散しているが、検索軸は direct_terms と behavior_terms に寄っている"
+    ]
+  },
+  "next_query_candidates": [
+    {
+      "kind": "contradict",
+      "reason": "実践型の学習方法を支持する投稿に偏っているため、座学や動画を評価する反証投稿を確認する",
+      "suggested_fields": {
+        "any_of": [["生成AI", "LLM"], ["本", "動画", "講座"]],
+        "exclude": ["求人", "採用"],
+        "period": "30d"
+      },
+      "expected_observation": "実践以外の学習方法を支持する投稿があるか確認できる"
+    },
+    {
+      "kind": "broaden",
+      "reason": "勉強法という語彙に限定されているため、業務導入や現場学習の語彙を足す",
+      "suggested_fields": {
+        "any_of": [["生成AI", "LLM"], ["業務導入", "現場", "使い方"]],
+        "exclude_types": ["retweet"],
+        "period": "7d"
+      },
+      "expected_observation": "学習方法ではなく利用シーン起点の投稿を拾える"
+    }
+  ],
+  "usage": {
+    "x_api_post_reads": 0,
+    "bird_calls": 1,
+    "cached_hits": 0
+  },
+  "limitations": [
+    {
+      "code": "API_UNAUTHORIZED",
+      "scope": "diagnose",
+      "message": "X API returned 401. Re-issue the Bearer Token in X Developer Portal, update the aachat env provider, run `aachat up`, then re-run.",
+      "recoverable": false
+    },
+    {
+      "code": "API_TOKEN_MISSING",
+      "scope": "collection",
+      "message": "X_BEARER_TOKEN unusable. Collection stage skipped; result is bird discovery only and may not be reproducible.",
+      "recoverable": true
+    }
+  ],
+  "next_human_actions": [
+    "X Developer Portal で Bearer Token を再発行し、aachat env provider に X_BEARER_TOKEN として設定して `aachat up` 後に再実行する"
+  ]
+}

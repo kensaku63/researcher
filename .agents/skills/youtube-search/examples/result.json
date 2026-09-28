@@ -1,0 +1,76 @@
+{
+  "platform": "youtube",
+  "purpose": "trend_discovery",
+  "subcommand": "search",
+  "tool": "youtube_data_api",
+  "query": "生成AI 勉強法",
+  "language": "ja",
+  "region": "JP",
+  "period": "30d",
+  "fetched_at": "2026-06-06T00:00:00Z",
+  "quota_estimate": 102,
+  "auto_routing": {
+    "applied": true,
+    "from_purpose": "trend_discovery",
+    "chosen_subcommand": "search",
+    "chosen_defaults": {
+      "order": "date",
+      "max_per_channel": 2,
+      "comments_top_n": 3
+    }
+  },
+  "items": [
+    {
+      "url": "https://www.youtube.com/watch?v=exampleid01",
+      "source_id": "exampleid01",
+      "author": "Example Channel",
+      "author_url": "https://www.youtube.com/channel/UCexample",
+      "published_at": "2026-05-20T00:00:00Z",
+      "title": "生成AIの勉強法を30日で見直す",
+      "text": "説明文要約。関連語、対象者、動画構成を300文字以内で保持する。",
+      "metrics": {
+        "views": 120000,
+        "likes": 3200,
+        "comments": 180,
+        "subscribers": 45000,
+        "video_count": 312
+      },
+      "matched_terms": ["生成AI", "勉強法"],
+      "quality_score": 0.72,
+      "selection_filters": ["min_views_ok", "language_match", "in_period", "channel_diversity_ok"],
+      "why_selected": "order=date で直近公開。再生12万、コメント180、同一チャンネル制限を通過。",
+      "limitations": []
+    }
+  ],
+  "comments": [],
+  "trends": [],
+  "queries_tried": [
+    {
+      "endpoint": "search.list",
+      "query": "生成AI 勉強法",
+      "quota_cost": 100,
+      "result_count_before_filter": 42,
+      "result_count_after_filter": 18
+    },
+    {
+      "endpoint": "videos.list",
+      "query": "42 video ids",
+      "quota_cost": 1,
+      "result_count_before_filter": 42,
+      "result_count_after_filter": 42
+    },
+    {
+      "endpoint": "channels.list",
+      "query": "18 channel ids",
+      "quota_cost": 1,
+      "result_count_before_filter": 18,
+      "result_count_after_filter": 18
+    }
+  ],
+  "excluded_summary": [
+    { "reason": "same_channel_limit", "count": 8 },
+    { "reason": "below_min_views", "count": 12 }
+  ],
+  "limitations": [],
+  "next_human_actions": []
+}

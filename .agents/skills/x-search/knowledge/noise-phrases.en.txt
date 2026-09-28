@@ -1,0 +1,26 @@
+# English spam / low-signal phrase dictionary for x-search.
+# 1 line = 1 phrase. Lines starting with `#` are comments.
+# Matched case-insensitive, substring match in tweet text.
+
+follow back
+followback
+follow for follow
+f4f
+follow4follow
+like for like
+l4l
+retweet to win
+RT to win
+giveaway
+free crypto
+airdrop
+NFT drop
+DM me
+DM for
+make money fast
+work from home
+crypto signals
+adult content
+onlyfans
+join my discord
+join my telegram

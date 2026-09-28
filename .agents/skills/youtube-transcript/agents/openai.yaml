@@ -1,0 +1,4 @@
+interface:
+  display_name: "YouTube Transcript"
+  short_description: "Fetch or generate YouTube transcripts."
+  default_prompt: "Get the transcript for this YouTube video:"
