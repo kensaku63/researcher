@@ -56,6 +56,11 @@ def detect_matched_terms(items: List[Dict[str, Any]], structured: qb.StructuredQ
         for h in (structured.mentions or []) + (structured.to_accounts or []):
             if f"@{h.lstrip('@').lower()}" in text:
                 hits.append(f"@{h.lstrip('@')}")
+        links = " ".join(str(u) for u in (it.get("links") or [])).lower()
+        for u in structured.urls or []:
+            ul = u.strip().lower()
+            if ul and (ul in links or ul in text):
+                hits.append(f"url:{u.strip()}")
         out[sid] = hits
     return out
 

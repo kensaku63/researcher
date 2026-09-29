@@ -35,6 +35,7 @@ class StructuredQuery:
     from_accounts: List[str] = field(default_factory=list)
     to_accounts: List[str] = field(default_factory=list)
     mentions: List[str] = field(default_factory=list)
+    urls: List[str] = field(default_factory=list)
     include_types: List[str] = field(default_factory=list)
     exclude_types: List[str] = field(default_factory=list)
     min_followers: Optional[int] = None
@@ -157,6 +158,12 @@ def _build_base(q: StructuredQuery) -> List[str]:
         h = _normalize_handle(m)
         if h:
             parts.append(f"@{h}")
+    # url: matches the expanded link, so it finds everyone sharing an article,
+    # repo or domain even when the post text never names it.
+    link_ops = [f'url:"{u.strip()}"' if re.search(r"[^\w.-]", u.strip()) else f"url:{u.strip()}"
+                for u in q.urls if u.strip()]
+    if link_ops:
+        parts.append("(" + " OR ".join(link_ops) + ")" if len(link_ops) > 1 else link_ops[0])
     for t in q.include_types:
         token = _type_token("include", t)
         if token:

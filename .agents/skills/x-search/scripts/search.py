@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """x-search: X (Twitter) research subcommand dispatcher.
 
-Subcommands: diagnose | search | expand | account | counts | lookup | trend
+Subcommands: diagnose | search | expand | account | counts | lookup | trend | graph | merge
 
 All subcommands print a single JSON object that conforms to
 `schemas/result.schema.json`. Failures are returned as structured
@@ -20,8 +20,10 @@ See `docs/agent-designs/x-research-expert/SPEC.md` and `SPEC-script.md`.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
+import re
 import sys
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
@@ -40,7 +42,11 @@ import _query_builder as qb  # type: ignore[import-not-found]  # noqa: E402
 import _x_api  # type: ignore[import-not-found]  # noqa: E402
 
 
-SUBCOMMANDS = ("diagnose", "search", "expand", "account", "counts", "lookup", "trend", "graph")
+SUBCOMMANDS = ("diagnose", "search", "expand", "account", "counts", "lookup", "trend", "graph", "merge")
+
+# expand returns a whole conversation (root, replies, quotes), so it needs a
+# larger default than a keyword sample. merge keeps everything by default.
+DEFAULT_LIMITS = {"expand": 60, "merge": 0}
 
 _CONTRADICTION_TERMS = {
     "ja": ["不要", "使わない", "使ってない", "問題ない", "困ってない", "代替で十分", "やめた", "乗り換えない"],
@@ -109,7 +115,8 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--language")
     parser.add_argument("--region")
     parser.add_argument("--period")
-    parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--limit", type=int,
+                        help="Items to return (default 20; expand 60; merge 0 = all).")
     parser.add_argument("--max-fetch", type=int)
     parser.add_argument("--tool", choices=["auto", "bird", "x_api"], default="auto")
     parser.add_argument("--format", choices=["json", "markdown"], default="json")
@@ -131,6 +138,9 @@ def _add_search_fields(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--from-accounts", dest="from_accounts", action="append", nargs="+", default=[])
     parser.add_argument("--to-accounts", dest="to_accounts", action="append", nargs="+", default=[])
     parser.add_argument("--mentions", action="append", nargs="+", default=[])
+    parser.add_argument("--urls", action="append", nargs="+", default=[],
+                        help="Posts linking to this URL / domain / repo (url: operator). "
+                             "Multiple values are OR-ed. Finds who shares an article.")
     parser.add_argument("--include-types", dest="include_types", action="append", nargs="+", default=[])
     parser.add_argument("--exclude-types", dest="exclude_types", action="append", nargs="+", default=[])
     parser.add_argument("--min-followers", dest="min_followers", type=int)
@@ -168,6 +178,9 @@ def _add_noise_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--recommend-excludes", dest="recommend_excludes",
                         type=_bool_arg, default=True)
     parser.add_argument("--same-author-limit", dest="same_author_limit", type=int)
+    parser.add_argument("--exclude-seen", dest="exclude_seen", action="append", nargs="+", default=[],
+                        help="Earlier result JSON files or directories of them. Posts already in them "
+                             "are dropped (seen_before) and search_quality.novelty_score is filled.")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -191,6 +204,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_expand.add_argument("--include-replies", dest="include_replies", type=_bool_arg, default=True)
     p_expand.add_argument("--replies-max-pages", dest="replies_max_pages", type=int, default=2)
     p_expand.add_argument("--quote-depth", dest="quote_depth", type=int, default=1)
+    p_expand.add_argument("--include-quotes", dest="include_quotes", type=_bool_arg, default=True,
+                          help="Also fetch quote posts (quoted_tweet_id: search). Default true.")
+    p_expand.add_argument("--quotes-limit", dest="quotes_limit", type=int, default=40)
     _add_noise_options(p_expand)
 
     p_account = sub.add_parser("account", help="Account-rooted (tweets / mentions / profile)")
@@ -232,6 +248,12 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="bird -n per page (max 100).")
     p_graph.add_argument("--min-followers", dest="min_followers", type=int)
     p_graph.add_argument("--max-followers", dest="max_followers", type=int)
+
+    p_merge = sub.add_parser("merge", help="Merge several result JSON files into one deduplicated set")
+    _add_common(p_merge)
+    p_merge.add_argument("inputs", nargs="+",
+                         help="Result JSON files or directories containing them.")
+    p_merge.add_argument("--sort", choices=["likes", "bookmarks", "views", "recency"], default="likes")
 
     return parser
 
@@ -319,6 +341,7 @@ def _structured_from_args(args: argparse.Namespace) -> qb.StructuredQuery:
         from_accounts=_flatten_csv(getattr(args, "from_accounts", [])),
         to_accounts=_flatten_csv(getattr(args, "to_accounts", [])),
         mentions=_flatten_csv(getattr(args, "mentions", [])),
+        urls=_flatten_csv(getattr(args, "urls", [])),
         include_types=include_types,
         exclude_types=exclude_types,
         min_followers=getattr(args, "min_followers", None),
@@ -459,6 +482,7 @@ def _structured_terms(structured: Optional[qb.StructuredQuery]) -> List[str]:
     terms.extend(structured.hashtags)
     terms.extend(structured.from_accounts)
     terms.extend(structured.mentions)
+    terms.extend(f"url:{u}" for u in structured.urls)
     return [str(t).strip() for t in terms if str(t).strip()]
 
 
@@ -556,13 +580,13 @@ def _add_search_guidance(env: Dict[str, Any], args: argparse.Namespace,
             "expected_observation": "Posts that weaken, qualify, or contradict the current interpretation should become visible.",
         })
 
-    expand_item = next(
-        (
-            item for item in items
-            if ((item.get("metrics") or {}).get("replies") or 0) + ((item.get("metrics") or {}).get("quotes") or 0) >= 10
-        ),
-        None,
-    )
+    def _talk(item: Dict[str, Any]) -> int:
+        m = item.get("metrics") or {}
+        return int(m.get("replies") or 0) + int(m.get("quotes") or 0)
+
+    # Point at the most discussed post, and never at the post just expanded.
+    expand_pool = [it for it in items if _talk(it) >= 10 and it.get("relation") != "root"]
+    expand_item = max(expand_pool, key=_talk) if expand_pool else None
     if expand_item:
         candidates.append({
             "kind": "expand",
@@ -574,10 +598,85 @@ def _add_search_guidance(env: Dict[str, Any], args: argparse.Namespace,
     env["next_query_candidates"] = candidates[:5]
 
 
+def _result_files(paths: List[str], skip: Optional[str] = None) -> List[str]:
+    """Expand directories to their *.json files. `skip` is this run's own -o
+    path, so re-running a query does not read its previous output."""
+    files: List[str] = []
+    for p in paths:
+        if os.path.isdir(p):
+            files.extend(sorted(glob.glob(os.path.join(p, "*.json"))))
+        else:
+            files.append(p)
+    skip_abs = os.path.abspath(skip) if skip else None
+    return [f for f in files if os.path.abspath(f) != skip_abs]
+
+
+def _load_result(env: Dict[str, Any], path: str, scope: str) -> Optional[Dict[str, Any]]:
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        _add_limitation(env, "INVALID_INPUT", f"Could not read {path}: {type(exc).__name__}",
+                        recoverable=True, scope=scope)
+        return None
+    if not isinstance(data, dict) or data.get("platform") != "x":
+        _add_limitation(env, "INVALID_INPUT", f"{path} is not an x-search result JSON",
+                        recoverable=True, scope=scope)
+        return None
+    return data
+
+
+def _seen_ids(env: Dict[str, Any], paths: List[str], skip: Optional[str] = None) -> set:
+    seen: set = set()
+    for path in _result_files(paths, skip):
+        data = _load_result(env, path, "exclude_seen")
+        for it in (data or {}).get("items") or []:
+            if isinstance(it, dict) and it.get("source_id"):
+                seen.add(str(it["source_id"]))
+    return seen
+
+
+_RELATION_ORDER = {"parent": 0, "root": 1, "thread": 2, "reply": 3, "quote": 4}
+
+
+def _epoch(iso: Optional[str]) -> float:
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _conversation_key(it: Dict[str, Any]) -> tuple:
+    """Read the post and its thread top-down, then reactions by likes."""
+    rel = it.get("relation")
+    if rel in ("parent", "root", "thread"):
+        return (_RELATION_ORDER[rel], _epoch(it.get("published_at")))
+    return (_RELATION_ORDER.get(rel, 5), -float((it.get("metrics") or {}).get("likes") or 0))
+
+
 def _finalize(env: Dict[str, Any], args: argparse.Namespace,
               raw_items: List[Dict[str, Any]],
               structured: Optional[qb.StructuredQuery] = None) -> None:
     """Apply noise filters, scoring, representative pick, and update envelope."""
+    # The expanded post itself is the subject, not a sample: never filter it out.
+    pinned: List[Dict[str, Any]] = []
+    for it in raw_items:
+        if it.get("relation") == "root" and all(p["source_id"] != it["source_id"] for p in pinned):
+            pinned.append(it)
+    raw_items = [it for it in raw_items if it.get("relation") != "root"]
+
+    novelty: Optional[float] = None
+    seen_count = 0
+    seen_paths = _flatten_csv(getattr(args, "exclude_seen", []))
+    if seen_paths:
+        seen = _seen_ids(env, seen_paths, skip=getattr(args, "output", None))
+        unique = {str(it.get("source_id")) for it in raw_items if it.get("source_id")}
+        if unique:
+            novelty = round(1 - len(unique & seen) / len(unique), 2)
+        fresh = [it for it in raw_items if str(it.get("source_id")) not in seen]
+        seen_count = len({str(it.get("source_id")) for it in raw_items} - {str(it.get("source_id")) for it in fresh})
+        raw_items = fresh
+
     if structured is not None:
         matched_terms_for = _normalize.detect_matched_terms(raw_items, structured)
     else:
@@ -585,6 +684,13 @@ def _finalize(env: Dict[str, Any], args: argparse.Namespace,
 
     opts = _noise_options(args)
     opts.query_terms = _structured_terms(structured)
+    # For --urls the shared link is the content: "これ良い <link>" is a valid
+    # share, so the text-length and URL-ratio floors would drop the very posts asked for.
+    if structured is not None and structured.urls:
+        if opts.text_min_length is None:
+            opts.text_min_length = 0
+        if opts.max_url_ratio is None:
+            opts.max_url_ratio = 1.0
     single_author = structured is None or bool(structured.from_accounts) or "from:" in (structured.raw_query or "")
     # account / expand / lookup pass structured=None — there are no search
     # terms to "match", so dropping items by require_matched_terms would
@@ -608,21 +714,23 @@ def _finalize(env: Dict[str, Any], args: argparse.Namespace,
     scored = _normalize.score_items(kept, purpose=purpose, period=getattr(args, "period", None),
                                     from_accounts=from_accounts, mentions=mentions)
     limit = max(1, int(getattr(args, "limit", 20)))
-    picked = _normalize.representative_pick(scored, limit=limit)
+    picked = pinned + _normalize.representative_pick(scored, limit=max(1, limit - len(pinned)))
     score_by_id = {it.get("source_id"): sc for it, sc in scored}
     if env["tool"] == "expand":
-        # Read a conversation top-down.
-        picked.sort(key=lambda it: it.get("published_at") or "")
+        picked.sort(key=_conversation_key)
     elif getattr(args, "sort", None) == "recency" or structured is None:
         picked.sort(key=lambda it: it.get("published_at") or "", reverse=True)
     else:
         picked.sort(key=lambda it: score_by_id.get(it.get("source_id"), 0.0), reverse=True)
     _normalize.attach_why_selected(picked, purpose=purpose)
 
+    by_reason = [r.to_dict() for r in excluded]
+    if seen_count:
+        by_reason.insert(0, {"code": "seen_before", "count": seen_count})
     env["items"] = picked
     env["excluded_summary"] = {
-        "total_excluded": sum(r.count for r in excluded),
-        "by_reason": [r.to_dict() for r in excluded],
+        "total_excluded": sum(r.count for r in excluded) + seen_count,
+        "by_reason": by_reason,
     }
     env["queries_built"]["recommended_excludes"] = recommended
 
@@ -632,12 +740,18 @@ def _finalize(env: Dict[str, Any], args: argparse.Namespace,
         _add_limitation(env, "QUERY_TOO_BROAD", "Many results were filtered out as noise. "
                                                 "Consider adding --exclude terms from queries_built.recommended_excludes.",
                         recoverable=True, scope="discovery")
-    if total_kept == 0 and total_in <= 3:
+    if total_kept == 0 and total_in <= 3 and not seen_count:
         _add_limitation(env, "RESULTS_INSUFFICIENT",
                         "Too few results. Consider relaxing --exclude, widening --period, "
                         "or replacing --phrases with --keywords.",
                         recoverable=True, scope="discovery")
     _add_search_guidance(env, args, structured)
+    if seen_paths and env.get("search_quality") is not None:
+        env["search_quality"]["novelty_score"] = novelty
+        if novelty is not None and novelty < 0.3:
+            env["search_quality"]["notes"].append(
+                f"{seen_count} fetched posts were already in earlier results (novelty {novelty}); "
+                "this query axis looks saturated, change vocabulary, period or angle.")
 
 
 # ----- Subcommand handlers -----
@@ -812,35 +926,53 @@ def handle_expand(args: argparse.Namespace) -> Dict[str, Any]:
 
     raw_items: List[Dict[str, Any]] = []
     post_id = args.id
+    root_id = _post_id(post_id)
 
     use_bird = tool_pref in ("auto", "bird") and bird_ok
     use_api = tool_pref in ("auto", "x_api") and api_ok and not use_bird
 
+    # Short reactions ("それな", "+1 this") are the point of a conversation
+    # dump, so the keyword-search length floor does not apply here.
+    if getattr(args, "text_min_length", None) is None:
+        args.text_min_length = 2
+
     if use_bird:
-        if getattr(args, "include_thread", True):
-            res = _bird.thread(post_id)
+        seen_ids: set = set()
+
+        def _collect(res: Any, label: str, relation: Optional[str]) -> None:
             env["usage"]["bird_calls"] = env["usage"].get("bird_calls", 0) + 1
             if res.ok and isinstance(res.data, list):
-                normalized = [_bird.normalize_tweet(t, stage="single") for t in res.data]
-                normalized = [n for n in normalized if n]
-                raw_items.extend(normalized)
-                _push_query_tried(env, "single", "bird", f"thread:{post_id}", len(normalized), res.elapsed_ms)
+                added = 0
+                for t in res.data:
+                    item = _bird.normalize_tweet(t, stage="single")
+                    # thread and replies overlap; count each post once.
+                    if not item or item["source_id"] in seen_ids:
+                        continue
+                    seen_ids.add(item["source_id"])
+                    if relation:
+                        item["relation"] = relation
+                    raw_items.append(item)
+                    added += 1
+                _push_query_tried(env, "single", "bird", label, added, res.elapsed_ms)
+                if len(res.data) > added:
+                    env["queries_tried"][-1]["already_collected"] = len(res.data) - added
             elif res.error:
                 _add_limitation(env, res.error.code, res.error.message, res.error.recoverable, "expand")
 
+        if getattr(args, "include_thread", True):
+            _collect(_bird.thread(post_id), f"thread:{post_id}", None)
         if getattr(args, "include_replies", True):
-            res = _bird.replies(post_id, max_pages=int(getattr(args, "replies_max_pages", 2)))
-            env["usage"]["bird_calls"] = env["usage"].get("bird_calls", 0) + 1
-            if res.ok and isinstance(res.data, list):
-                normalized = [_bird.normalize_tweet(t, stage="single") for t in res.data]
-                normalized = [n for n in normalized if n]
-                raw_items.extend(normalized)
-                _push_query_tried(env, "single", "bird", f"replies:{post_id}", len(normalized), res.elapsed_ms)
-            elif res.error:
-                _add_limitation(env, res.error.code, res.error.message, res.error.recoverable, "expand")
+            _collect(_bird.replies(post_id, max_pages=int(getattr(args, "replies_max_pages", 2))),
+                     f"replies:{post_id}", None)
+        if getattr(args, "include_quotes", True):
+            _collect(_bird.quotes(root_id, n=int(getattr(args, "quotes_limit", 40))),
+                     f"quoted_tweet_id:{root_id}", "quote")
+        if root_id not in seen_ids:
+            _collect(_bird.read_post(post_id), f"read:{post_id}", None)
+        _label_relations(raw_items, root_id)
     elif use_api:
         # Need conversation_id; resolve via post lookup first.
-        lookup = _x_api.post_lookup([post_id])
+        lookup = _x_api.post_lookup([root_id])
         env["usage"]["x_api_post_reads"] = env["usage"].get("x_api_post_reads", 0) + 1
         if lookup.ok and isinstance(lookup.data, dict):
             data_arr = lookup.data.get("data") or []
@@ -849,7 +981,9 @@ def handle_expand(args: argparse.Namespace) -> Dict[str, Any]:
                 res = _x_api.conversation_search(conv_id, max_results=100)
                 if res.ok:
                     api_items = _x_api.items_from_response(res.data, stage="single")
+                    raw_items.extend(_x_api.items_from_response(lookup.data, stage="single"))
                     raw_items.extend(api_items)
+                    _label_relations(raw_items, root_id)
                     _push_query_tried(env, "single", "x_api", f"conversation_id:{conv_id}",
                                       len(api_items), res.elapsed_ms, next_token=res.next_token)
                     env["usage"]["x_api_post_reads"] = env["usage"].get("x_api_post_reads", 0) + 100
@@ -864,6 +998,31 @@ def handle_expand(args: argparse.Namespace) -> Dict[str, Any]:
 
     _finalize(env, args, raw_items, structured=None)
     return env
+
+
+def _post_id(value: str) -> str:
+    """Numeric post id from an id or an x.com/.../status/<id> URL."""
+    m = re.search(r"/status(?:es)?/(\d+)", str(value))
+    return m.group(1) if m else str(value).strip()
+
+
+def _label_relations(items: List[Dict[str, Any]], root_id: str) -> None:
+    """Tag each conversation post as parent / root / thread / reply / quote."""
+    root = next((it for it in items if it.get("source_id") == root_id), None)
+    root_author = ((root or {}).get("author") or {}).get("handle", "").lower()
+    root_time = _epoch((root or {}).get("published_at"))
+    for it in items:
+        if it.get("relation"):
+            continue
+        author = ((it.get("author") or {}).get("handle") or "").lower()
+        if it.get("source_id") == root_id:
+            it["relation"] = "root"
+        elif root_author and author == root_author:
+            it["relation"] = "thread"
+        elif root is not None and _epoch(it.get("published_at")) < root_time:
+            it["relation"] = "parent"
+        else:
+            it["relation"] = "reply"
 
 
 def handle_account(args: argparse.Namespace) -> Dict[str, Any]:
@@ -1039,7 +1198,7 @@ def handle_lookup(args: argparse.Namespace) -> Dict[str, Any]:
             elif res.error:
                 _add_limitation(env, res.error.code, res.error.message, res.error.recoverable, "lookup")
         elif api_ok and tool_pref in ("auto", "x_api"):
-            res = _x_api.post_lookup([post_id])
+            res = _x_api.post_lookup([_post_id(post_id)])
             env["usage"]["x_api_post_reads"] = env["usage"].get("x_api_post_reads", 0) + 1
             if res.ok:
                 api_items = _x_api.items_from_response(res.data, stage="lookup")
@@ -1323,6 +1482,90 @@ def handle_graph(args: argparse.Namespace) -> Dict[str, Any]:
     return env
 
 
+_MERGE_SORT = {
+    "likes": lambda it: -float((it.get("metrics") or {}).get("likes") or 0),
+    "bookmarks": lambda it: -float((it.get("metrics") or {}).get("bookmarks") or 0),
+    "views": lambda it: -float((it.get("metrics") or {}).get("views") or 0),
+    "recency": lambda it: -_epoch(it.get("published_at")),
+}
+
+
+def handle_merge(args: argparse.Namespace) -> Dict[str, Any]:
+    """Merge result JSONs from several queries into one deduplicated set.
+
+    One research turn usually runs several queries (axes, synonyms, a
+    contradiction probe). This joins them for x-search-report, keeping which
+    query surfaced each post in `found_by` and every query in `queries_tried`.
+    No network access.
+    """
+    env = _envelope("merge", args)
+    for tool in ("bird", "x_api"):
+        _mark_credential_skipped(env, tool, "merge_is_offline")
+    by_id: Dict[str, Dict[str, Any]] = {}
+    sources: List[Dict[str, Any]] = []
+    excluded: Dict[str, int] = {}
+    periods: set = set()
+    explicit = {os.path.abspath(p) for p in args.inputs if not os.path.isdir(p)}
+    for path in _result_files(args.inputs, skip=getattr(args, "output", None)):
+        data = _load_result(env, path, "merge")
+        if data is None:
+            continue
+        # A directory usually also holds an earlier merged.json; re-merging it
+        # would double every found_by. Merge outputs are only taken when named.
+        if data.get("tool") == "merge" and os.path.abspath(path) not in explicit:
+            continue
+        qb_ = data.get("queries_built") or {}
+        query = qb_.get("bird") or qb_.get("x_api") or next(
+            (q.get("query") for q in data.get("queries_tried") or [] if q.get("query")), None)
+        label = os.path.basename(path)
+        items = data.get("items") or []
+        sources.append({"file": path, "tool": data.get("tool"), "query": query, "period": data.get("period"),
+                        "fetched_at": data.get("fetched_at"), "items": len(items)})
+        if data.get("period"):
+            periods.add(data["period"])
+        for key in ("language", "purpose", "region"):
+            env[key] = env.get(key) or data.get(key)
+        for q in data.get("queries_tried") or []:
+            env["queries_tried"].append({**q, "source_file": label})
+        for lim in data.get("limitations") or []:
+            env["limitations"].append({**lim, "source_file": label})
+        for row in (data.get("excluded_summary") or {}).get("by_reason") or []:
+            excluded[row["code"]] = excluded.get(row["code"], 0) + int(row.get("count") or 0)
+        for it in items:
+            sid = str(it.get("source_id") or "")
+            if not sid:
+                continue
+            hit = {"file": label, "query": query}
+            prev = by_id.get(sid)
+            if prev is None:
+                by_id[sid] = {**it, "found_by": [hit]}
+                continue
+            prev["found_by"].append(hit)
+            terms = list(dict.fromkeys((prev.get("matched_terms") or []) + (it.get("matched_terms") or [])))
+            # Keep the most recently fetched copy: its metrics are the freshest.
+            if ((it.get("provenance") or {}).get("fetched_at") or "") > ((prev.get("provenance") or {}).get("fetched_at") or ""):
+                found_by = prev["found_by"]
+                prev.clear()
+                prev.update(it)
+                prev["found_by"] = found_by
+            prev["matched_terms"] = terms
+    items = sorted(by_id.values(), key=_MERGE_SORT[args.sort])
+    duplicates = sum(src["items"] for src in sources) - len(items)
+    if args.limit:
+        items = items[:args.limit]
+    env["items"] = items
+    env["sources"] = sources
+    env["period"] = ", ".join(sorted(periods)) or None
+    by_reason = [{"code": code, "count": n} for code, n in sorted(excluded.items(), key=lambda kv: -kv[1])]
+    env["excluded_summary"] = {"total_excluded": sum(excluded.values()), "by_reason": by_reason}
+    env["merge_summary"] = {"files": len(sources), "unique_items": len(by_id),
+                            "cross_query_duplicates": duplicates, "returned": len(items)}
+    if not sources:
+        _add_limitation(env, "INVALID_INPUT", "No readable result JSON among the inputs.",
+                        recoverable=False, scope="merge")
+    return env
+
+
 HANDLERS = {
     "diagnose": handle_diagnose,
     "search": handle_search,
@@ -1332,6 +1575,7 @@ HANDLERS = {
     "lookup": handle_lookup,
     "trend": handle_trend,
     "graph": handle_graph,
+    "merge": handle_merge,
 }
 
 
@@ -1391,9 +1635,41 @@ def _item_markdown(i: int, it: Dict[str, Any]) -> List[str]:
         out.append(f"- links: {' '.join(it['links'][:5])}")
     if it.get("media"):
         out.append(f"- media: {', '.join(it['media'])}")
+    if it.get("found_by"):
+        queries = " / ".join(f"`{h.get('query') or h.get('file')}`" for h in it["found_by"])
+        out.append(f"- found_by ({len(it['found_by'])}): {queries}")
     if it.get("why_selected"):
         out.append(f"- why_selected: {it['why_selected']}")
     out.append("")
+    return out
+
+
+_RELATION_TITLES = {"parent": "元の会話（親投稿）", "root": "対象投稿", "thread": "投稿者本人のスレッド",
+                    "reply": "返信", "quote": "引用投稿"}
+
+
+def _cell(text: Any, width: int = 60) -> str:
+    flat = " ".join(str(text or "").split()).replace("|", "\\|")
+    flat = re.sub(r"https?://t\.co/\S+", "", flat).strip()
+    return flat[:width] + ("…" if len(flat) > width else "")
+
+
+def _overview_table(items: List[Dict[str, Any]]) -> List[str]:
+    """One row per post so a long result can be scanned before reading it."""
+    has_rel = any(it.get("relation") for it in items)
+    has_found = any(it.get("found_by") for it in items)
+    head = ["#"] + (["種別"] if has_rel else []) + ["投稿者", "followers", "日時 (JST)", "♥", "RT", "返信", "引用", "BM"]
+    head += (["hit"] if has_found else []) + ["冒頭"]
+    out = ["| " + " | ".join(head) + " |", "|" + "|".join("---:" if h in ("#", "followers", "♥", "RT", "返信", "引用", "BM", "hit") else "---" for h in head) + "|"]
+    for i, it in enumerate(items, 1):
+        a = it.get("author") or {}
+        m = it.get("metrics") or {}
+        row = [str(i)] + ([it.get("relation") or ""] if has_rel else [])
+        row += [a.get("handle") or "?", _num(a.get("followers")), _jst(it.get("published_at"))[:16],
+                _num(m.get("likes")), _num(m.get("reposts")), _num(m.get("replies")), _num(m.get("quotes")),
+                _num(m.get("bookmarks"))]
+        row += ([str(len(it.get("found_by") or []))] if has_found else []) + [_cell(it.get("text"))]
+        out.append("| " + " | ".join(row) + " |")
     return out
 
 
@@ -1409,17 +1685,43 @@ def _to_markdown(env: Dict[str, Any]) -> str:
         if env.get(key):
             meta.append(f"{key}={env[key]}")
     creds = env.get("credentials") or {}
-    meta.append(f"bird={'ok' if (creds.get('bird') or {}).get('available') else 'n/a'}")
-    meta.append(f"x_api={'ok' if (creds.get('x_api') or {}).get('available') else 'n/a'}")
+    for tool in ("bird", "x_api"):
+        c = creds.get(tool) or {}
+        state = "ok" if c.get("available") else ("未使用" if str(c.get("reason") or "").startswith(("skipped", "merge")) else "n/a")
+        meta.append(f"{tool}={state}")
     lines.append("- " + " · ".join(meta))
+    novelty = (env.get("search_quality") or {}).get("novelty_score")
+    if novelty is not None:
+        lines.append(f"- novelty={novelty}（--exclude-seen の既出投稿を除いた新規率）")
     fetched = sum(int(q.get("result_count") or 0) for q in env.get("queries_tried") or [])
     excluded = (env.get("excluded_summary") or {}).get("total_excluded", 0)
-    if env.get("items") is not None and env["tool"] not in ("diagnose", "trend", "counts", "graph"):
+    if env["tool"] == "merge":
+        ms = env.get("merge_summary") or {}
+        lines.append(f"- {ms.get('files', 0)} ファイル → 重複除去後 {ms.get('unique_items', 0)} 件"
+                     f"（クエリ間の重複 {ms.get('cross_query_duplicates', 0)} 件）→ 表示 {ms.get('returned', 0)} 件")
+        lines.append("\n## 統合したクエリ\n")
+        lines.append("| file | tool | period | 採用 | query |")
+        lines.append("|---|---|---|---:|---|")
+        for src in env.get("sources") or []:
+            lines.append(f"| {os.path.basename(src['file'])} | {src.get('tool')} | {src.get('period') or '-'} | "
+                         f"{src.get('items')} | `{_cell(src.get('query'), 120)}` |")
+    elif env.get("items") is not None and env["tool"] not in ("diagnose", "trend", "counts", "graph"):
         lines.append(f"- 取得 {fetched} 件 → 除外 {excluded} 件 → 採用 {len(env.get('items') or [])} 件")
 
-    if env.get("items"):
-        lines.append(f"\n## 投稿 ({len(env['items'])})\n")
-        for i, it in enumerate(env["items"], 1):
+    items = env.get("items") or []
+    if len(items) > 1:
+        lines.append(f"\n## 一覧 ({len(items)})\n")
+        lines.extend(_overview_table(items))
+    if items:
+        if not any(it.get("relation") for it in items):
+            lines.append(f"\n## 投稿 ({len(items)})\n")
+        current = None
+        for i, it in enumerate(items, 1):
+            rel = it.get("relation")
+            if rel and rel != current:
+                count = sum(1 for x in items if x.get("relation") == rel)
+                lines.append(f"\n## {_RELATION_TITLES.get(rel, rel)} ({count})\n")
+                current = rel
             lines.extend(_item_markdown(i, it))
 
     if env.get("counts"):
@@ -1470,7 +1772,9 @@ def _to_markdown(env: Dict[str, Any]) -> str:
     if env.get("queries_tried"):
         lines.append("\n## queries_tried\n")
         for q in env["queries_tried"]:
-            lines.append(f"- [{q.get('tool')}/{q.get('stage')}] `{q.get('query')}` → {q.get('result_count')} 件")
+            dup = f"（他の取得と重複 {q['already_collected']} 件）" if q.get("already_collected") else ""
+            src = f" [{q['source_file']}]" if q.get("source_file") else ""
+            lines.append(f"- [{q.get('tool')}/{q.get('stage')}]{src} `{q.get('query')}` → {q.get('result_count')} 件{dup}")
 
     if env.get("limitations"):
         lines.append("\n## limitations\n")
@@ -1490,6 +1794,15 @@ def _summary_line(env: Dict[str, Any], path: str) -> str:
     for key in ("items", "trends", "counts", "candidates"):
         if env.get(key):
             parts.append(f"{key}={len(env[key])}")
+    rels: Dict[str, int] = {}
+    for it in env.get("items") or []:
+        if it.get("relation"):
+            rels[it["relation"]] = rels.get(it["relation"], 0) + 1
+    if rels:
+        parts.append("(" + ", ".join(f"{k}={v}" for k, v in rels.items()) + ")")
+    novelty = (env.get("search_quality") or {}).get("novelty_score")
+    if novelty is not None:
+        parts.append(f"novelty={novelty}")
     ex = (env.get("excluded_summary") or {}).get("total_excluded")
     if ex:
         parts.append(f"excluded={ex}")
@@ -1502,6 +1815,8 @@ def _summary_line(env: Dict[str, Any], path: str) -> str:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "limit", None) is None:
+        args.limit = DEFAULT_LIMITS.get(args.subcommand, 20)
 
     handler = HANDLERS.get(args.subcommand)
     if handler is None:

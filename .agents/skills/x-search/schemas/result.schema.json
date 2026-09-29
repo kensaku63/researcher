@@ -28,7 +28,8 @@
         "counts",
         "lookup",
         "trend",
-        "graph"
+        "graph",
+        "merge"
       ]
     },
     "purpose": {
@@ -268,7 +269,8 @@
                   "language_mismatch",
                   "low_author_quality",
                   "engagement_anomaly",
-                  "same_author_limit"
+                  "same_author_limit",
+                  "seen_before"
                 ]
               },
               "count": { "type": "integer", "minimum": 0 },

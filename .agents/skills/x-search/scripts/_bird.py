@@ -21,6 +21,7 @@ secret values.
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -29,6 +30,11 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+
+
+def _unescape(text: Any) -> Any:
+    # X returns post text HTML-escaped (&gt; &amp; &lt;); store it as written.
+    return html.unescape(text) if isinstance(text, str) else text
 
 
 BIRD_BIN = os.environ.get("BIRD_BIN", "bird")
@@ -317,7 +323,7 @@ def _quoted_summary(q: Any) -> Optional[Dict[str, Any]]:
         "source_id": str(q["id"]),
         "url": f"https://x.com/{handle}/status/{q['id']}" if handle else None,
         "author_handle": f"@{handle}" if handle else None,
-        "text": q.get("text"),
+        "text": _unescape(q.get("text")),
         "likes": _to_int(q.get("likeCount")),
     }
 
@@ -367,7 +373,7 @@ def normalize_tweet(raw: Dict[str, Any], stage: str = "discovery") -> Dict[str, 
             "quality": _author_quality(user),
         },
         "published_at": _to_iso(raw.get("createdAt") or raw.get("created_at")),
-        "text": _first(raw.get("text"), raw.get("fullText"), raw.get("full_text")),
+        "text": _unescape(_first(raw.get("text"), raw.get("fullText"), raw.get("full_text"))),
         "metrics": {
             "likes": _to_int(_first(raw.get("likeCount"), raw.get("favorite_count"))),
             "reposts": _to_int(_first(raw.get("retweetCount"), raw.get("retweet_count"))),
@@ -536,6 +542,19 @@ def replies(post_id: str, max_pages: int = 2) -> BirdCallResult:
     tweets = _extract_tweets(res.data)
     res.data = tweets
     return res
+
+
+def quotes(post_id: str, n: int = 40) -> BirdCallResult:
+    """Quote posts of one post via the `quoted_tweet_id:<id>` search operator.
+
+    `bird replies` never returns quotes, yet on announcements the quotes are
+    where most of the commentary happens.
+    """
+    if not str(post_id).isdigit():
+        return BirdCallResult(ok=False, error=BirdError(
+            code="INVALID_INPUT", message=f"quotes needs a numeric post id, got {post_id!r}",
+            recoverable=False, scope="expand"))
+    return search(f"quoted_tweet_id:{post_id}", limit=n, max_fetch=n)
 
 
 def user_tweets(handle: str, n: int = 50) -> BirdCallResult:

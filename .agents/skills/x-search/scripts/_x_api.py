@@ -14,10 +14,16 @@ Reference: x-research-methods.md L160-293, SPEC-script.md L759-781.
 
 from __future__ import annotations
 
+import html
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+
+
+def _unescape(text: Any) -> Any:
+    # X returns post text HTML-escaped (&gt; &amp; &lt;); store it as written.
+    return html.unescape(text) if isinstance(text, str) else text
 
 try:
     import requests  # type: ignore[import-untyped]
@@ -242,7 +248,7 @@ def normalize_tweet(raw: Dict[str, Any], users_by_id: Dict[str, Dict[str, Any]],
             "quality": None,
         },
         "published_at": raw.get("created_at"),
-        "text": raw.get("text"),
+        "text": _unescape(raw.get("text")),
         "metrics": {
             "likes": _to_int(metrics.get("like_count")),
             "reposts": _to_int(metrics.get("retweet_count")),

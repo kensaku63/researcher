@@ -2,7 +2,7 @@
 name: x-search
 description: |
   X（旧 Twitter）の調査を `bird` CLI と X API v2 を使い分けて実行し、ノイズ除去・採用理由付けまで行った構造化結果（JSON）を返す skill。
-  キーワード検索、ハッシュタグ検索、アカウント起点、スレッド・返信深掘り、投稿量カウント、URL/ID の現存確認、トレンド抽出に対応する。
+  キーワード検索、ハッシュタグ検索、URL 共有者検索、アカウント起点、スレッド・返信・引用の深掘り、投稿量カウント、URL/ID の現存確認、トレンド抽出、複数結果の統合（merge）に対応する。
   raw response はそのまま返さず、テキスト品質・スパム辞書・自動投稿クライアント・近似重複・author quality・engagement 異常まで機械フィルタを適用し、次に試すべき検索候補も構造化して返す。
 disable-model-invocation: true
 ---
@@ -26,7 +26,28 @@ python3 .agents/skills/x-search/scripts/search.py search \
 ```
 
 - `-o x.json` は `x.json` と `x.md` を 1 回の取得で書き出す。大きい JSON を会話に流さずに済むので、調査では基本 `-o` を使う。
-- Markdown には本文全文、JST 日時、♥/RT/返信/引用/表示/ブックマーク、投稿者の followers、引用元、展開済みリンクが入る。
+- Markdown は先頭に「一覧」表（1 投稿 1 行: 投稿者・followers・日時・♥/RT/返信/引用/BM・冒頭 60 字）、その後に本文全文、JST 日時、表示数、引用元、展開済みリンクが続く。まず一覧で当たりを付け、必要な投稿だけ本文を読む。
+
+### 調査の標準の流れ
+
+```bash
+D=/tmp/x/claude-code-limits          # 調査ごとに 1 ディレクトリ
+S=.agents/skills/x-search/scripts/search.py
+
+# 1. 軸ごとに検索。2 本目以降は --exclude-seen で既読を除く（novelty_score が出る）
+python3 $S search --keywords "Claude Code" --any-of 制限 上限 --language ja --period 7d -o $D/01-limits.json
+python3 $S search --keywords "Claude Code" --any-of 解約 乗り換え --language ja --period 7d \
+  --exclude-seen $D -o $D/02-churn.json
+
+# 2. 話題の元投稿を深掘り（スレッド + 返信 + 引用投稿）
+python3 $S expand --id https://x.com/<user>/status/<id> -o $D/03-expand.json
+
+# 3. 記事・リポジトリを誰がどう紹介しているか
+python3 $S search --urls pc.watch.impress.co.jp/docs/news/2143606.html --period 7d -o $D/04-article.json
+
+# 4. まとめて 1 本に（重複除去・found_by 付き）→ x-search-report へ
+python3 $S merge $D -o $D/merged.json
+```
 
 ## いつ呼ぶか
 
@@ -49,12 +70,13 @@ python3 .agents/skills/x-search/scripts/search.py search \
 |---|---|---|---|---|
 | `diagnose` | 認証・access level の事前確認 | `bird check` + X API recent ping (`max_results=10`) | — | 実検索なし。credential 状態のみ返す |
 | `search` | キーワード / ハッシュタグ / プロフィール条件での候補取得 | bird search (discovery) → X API Recent Search (collection) の 2 段 | 片方不可ならもう片方のみ。両方不可なら `site:x.com` URL 列挙のみ | メイン |
-| `expand` | 既知 post の thread / replies 深掘り | `bird thread` + `bird replies --max-pages N` | X API `conversation_id:<id>` Recent Search | 1 ID ずつ |
+| `expand` | 既知 post の thread / replies / quotes 深掘り | `bird thread` + `bird replies --max-pages N` + `quoted_tweet_id:<id>` 検索 | X API `conversation_id:<id>` Recent Search（引用なし） | 1 ID ずつ。各 item に `relation` |
 | `account` | アカウント起点（投稿・メンション・プロフィール） | `bird user-tweets` + `bird about` + `bird mentions --user` | X API `GET /2/users/by/username` → `/users/:id/tweets` / `/users/:id/mentions` | — |
 | `counts` | 期間内の投稿量山見・クエリ候補比較 | X API `GET /2/tweets/counts/recent` (`granularity=hour\|day`) | 不可と明示 | bird に該当機能なし |
 | `lookup` | URL / ID の現存確認 | `bird read` | X API `GET /2/tweets?ids=...` | 取得後の整形は最小 |
 | `trend` | X 内の話題候補抽出 | `bird news --with-tweets` + `bird trending` | — | X API には対応 endpoint なし |
 | `graph` | seed アカウント群とのフォロー重なりで候補を採点・発掘 | `bird following --user` / `bird followers --user` | — | bird のみ。観測可能な重なり数とプロフィール事実だけを返す |
+| `merge` | 複数の結果 JSON を 1 本に統合 | ローカル処理（通信なし） | — | `source_id` で重複除去し `found_by[]` を付与 |
 
 `search` は 1 サブコマンドの内部で「discovery 段（広く速く）→ collection 段（再現可能に）」の 2 段を回す。agent が collection を呼び忘れる事故を防ぐため、別サブコマンドに分けない。
 
@@ -68,7 +90,7 @@ python3 .agents/skills/x-search/scripts/search.py search \
 --language <ja|en|zh-Hans|zh-Hant>
 --region <JP|US|...>            # bird は無視。X API expansion 用
 --period <24h|7d|30d|90d|YYYY-MM-DD..YYYY-MM-DD>
---limit <int>                   # 最終返却件数
+--limit <int>                   # 最終返却件数（既定 20。expand は 60、merge は 0 = 全件）
 --max-fetch <int>               # 内部取得上限
 --tool <auto|bird|x_api>        # auto は diagnose 結果で選ぶ
 --format <json|markdown>
@@ -92,6 +114,8 @@ agent は構造化フィールドで意図を渡す。複数値はオプショ�
 --from-accounts <str>      # from:<handle>
 --to-accounts <str>        # to:<handle>
 --mentions <str>           # @<handle>
+--urls <str>               # url:<URL/ドメイン/リポジトリ>。リンクを共有した投稿を拾う（複数は OR）。
+                           # 本文に語が無くても展開済みリンクで一致する。記事・リポジトリの反応調査に使う
 --include-types <str>      # reply|quote|verified|media|links|images|videos
 --exclude-types <str>      # retweet|reply|quote
 --min-followers <int>      # followers_count:<min>..
@@ -132,7 +156,13 @@ bird の検索は X の「最新」タブ固定で、「話題」タブを選べ
 --include-replies <bool>       # default true
 --replies-max-pages <int>      # default 2
 --quote-depth <int>            # bird --quote-depth 同等。default 1
+--include-quotes <bool>        # default true。quoted_tweet_id:<id> 検索で引用投稿も取る
+--quotes-limit <int>           # default 40
 ```
+
+`bird replies` は引用投稿を返さないが、ニュースや発表では議論の大半が引用側で起きる（実測: 返信 13 件に対し引用 38 件）。そのため既定で引用も取得する。
+
+各 item には `relation` が付く: `root`（対象投稿。フィルタ対象外で必ず残る）/ `parent`（対象投稿より前の会話）/ `thread`（投稿者本人の続き）/ `reply` / `quote`。並び順は root → thread は時系列、reply → quote は ♥ 降順。Markdown も種別ごとに見出しを分ける。短い反応（「それな」など）も会話の一部なので、`expand` の本文長下限は既定 2 文字。
 
 ### `account`
 
@@ -163,6 +193,20 @@ bird の検索は X の「最新」タブ固定で、「話題」タブを選べ
 ```text
 --limit <int>                  # default 20
 ```
+
+### `merge`
+
+```text
+<inputs...>                    # 結果 JSON ファイル、またはそれを含むディレクトリ（複数可）
+--sort <likes|bookmarks|views|recency>   # default likes
+--limit <int>                  # default 0（全件）
+```
+
+1 ターンで投げた複数クエリの結果を `x-search-report` に渡す前に 1 本にまとめる。通信はしない。
+
+- `source_id` で重複除去し、各 item に `found_by[]`（どのファイル・クエリで見つかったか）を付ける。複数クエリにヒットした投稿は `hit` 列の数字が大きい。
+- 同じ投稿が複数ファイルにある場合は `fetched_at` が新しい方の metrics を残す。
+- `sources[]`（ファイル・クエリ・期間・採用数）、`merge_summary`（ファイル数・ユニーク件数・クエリ間重複数）、全ファイルの `queries_tried[]`（`source_file` 付き）と `limitations[]` を引き継ぐ。
 
 ### `graph`
 
@@ -205,7 +249,16 @@ bird の検索は X の「最新」タブ固定で、「話題」タブを選べ
 --min-author-quality <float>           # default purpose 連動
 --detect-engagement-anomaly <bool>     # default true
 --recommend-excludes <bool>            # default true
+--exclude-seen <path>                  # 以前の結果 JSON（またはそのディレクトリ）。既出投稿を seen_before で除外
 ```
+
+### 既読除外 `--exclude-seen`
+
+反復調査で同じ人気投稿が毎回上位を占めるのを防ぐ。指定したファイル／ディレクトリ内の結果 JSON（`merge` 結果も可）にある `source_id` を取得後に除外し、`excluded_summary.by_reason` に `seen_before` として件数を残す。
+
+- `search_quality.novelty_score` = 今回取得したユニーク投稿のうち未読の割合。0.3 未満なら notes に「検索軸が飽和」と出る。語彙・期間・角度を変える合図。
+- `expand` の対象投稿（`relation=root`）は既読でも除外しない。
+- `--urls` 指定時は、リンク共有そのものが対象なので本文長下限と URL 比率上限を既定で外す（明示指定すればそちらを優先）。
 
 ## 出力 JSON 骨格
 
@@ -469,6 +522,10 @@ bird の呼び出しは `--json-full` で行い、GraphQL の生データから�
 - `links`: t.co を展開した URL（GitHub・記事など）
 - `media`: `photo` / `video` など
 - `conversation_id`: `expand` に渡すスレッド ID
+- `relation`: `expand` のみ。`root` / `parent` / `thread` / `reply` / `quote`
+- `found_by`: `merge` のみ。`[{file, query}]`
+
+本文は HTML エスケープを戻した状態で保存する（`&gt;` → `>`）。
 
 ## 出力の使い方
 
@@ -476,6 +533,7 @@ bird の呼び出しは `--json-full` で行い、GraphQL の生データから�
 - agent は `items[]` を読み、ファクトレポート（`x-search-report` skill）の代表投稿セクションに転記する。
 - `excluded_summary.by_reason[]` を見て、ノイズが多すぎる場合 (`QUERY_TOO_BROAD`) には `queries_built.recommended_excludes[]` を次ターンの `--exclude` に加える。
 - `search_quality` を見て、採用投稿の偏り、検索軸の薄さ、反証不足を判断する。スコアは絶対評価ではなく、次検索の優先順位付けに使う。
+- `next_query_candidates[]` の `expand` は、採用投稿のうち返信 + 引用が最も多い投稿を指す（深掘り済みの対象投稿自身は除く）。
 - `next_query_candidates[]` を見て、次ターンの `x-search-plan` で「広げる」「絞る」「反証する」「深掘りする」のどれを行うか決める。
 - `limitations[].code` を見て、`recoverable=true` なら自動でフォールバック（bird ↔ X API、期間縮退）、`recoverable=false` なら `next_human_actions` を Markdown に書き出して人間に渡す。
 - `queries_built` と `queries_tried` を必ずファクトレポートに残す。再現性のために手段・クエリ・件数・取得日時を明示する。
@@ -488,7 +546,7 @@ bird の呼び出しは `--json-full` で行い、GraphQL の生データから�
 
 - `coverage_score`: 検索軸に対して採用投稿がどれだけ広く分布したか。単一語彙・単一軸に偏るほど低い。
 - `diversity_score`: author、URL、投稿タイプ、会話クラスタの分散。特定アカウントや近似重複に偏るほど低い。
-- `novelty_score`: 既存レポートとの差分が分かる場合のみ入れる。既存レポートを読めない場合は `null`。
+- `novelty_score`: `--exclude-seen` を指定したときだけ入る。今回取得したユニーク投稿のうち既読でなかった割合。指定なしなら `null`。
 - `contradiction_count`: 反証語彙、否定表現、別解釈を示す採用投稿の件数。仮説検証で特に使う。
 - `notes`: 次検索の判断に使える短い観察。施策やコピー案は書かない。
 

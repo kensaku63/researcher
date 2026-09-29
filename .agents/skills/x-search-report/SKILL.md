@@ -26,6 +26,8 @@ X 調査の事実だけを 1 本の Markdown レポートにまとめる skill�
 ## インプット
 
 - 1 ターンに `x-search` を 1 回以上呼んだ結果 (JSON、`schemas/result.schema.json` 準拠)。サブコマンドは `search` / `expand` / `account` / `counts` / `lookup` / `trend` が混在してよい。
+- 複数の `search` 結果は `x-search merge` で 1 本にしてから読むと、クエリ間の重複が除かれ、各 item の `found_by[]` に「どのクエリで見つかったか」が入る。`merge` の `queries_tried[].source_file` で元ファイルを辿れる。
+- `expand` 結果の `items[].relation`（`root` / `parent` / `thread` / `reply` / `quote`）は、元投稿・返信・引用の区別としてそのまま転記してよい。
 - `x-search-plan` skill で確定した検索目的 (`purpose`) 1 つ。1 ターン 1 purpose を厳守する。
 
 ## 出力
@@ -37,7 +39,7 @@ X 調査の事実だけを 1 本の Markdown レポートにまとめる skill�
 ## 手順
 
 1. **インプットの整合性を確認する**
-   - すべての JSON で `purpose` / `language` / `period` が一致すること。
+   - すべての JSON で `purpose` / `language` / `period` が一致すること（`merge` 結果は `sources[]` の各 period を見る）。
    - 一致しない場合は 1 ターン 1 purpose の前提が崩れているため、レポート生成を止めて `x-search-plan` に戻る。
 
 2. **frontmatter を埋める**
