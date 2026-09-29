@@ -5,20 +5,25 @@ its JSON output into the common item shape used by x-search.
 
 Phase 2 (Initial implementation):
 - diagnose: `bird check` and `bird whoami`
-- search: `bird search <query> -n N --json`
-- expand: `bird thread <id> --json` + `bird replies <id> --all --max-pages N --json`
-- account: `bird user-tweets <handle> -n N --json` (+ optional about / mentions)
-- lookup: `bird read <id> --json`
+- search: `bird search <query> -n N --json-full`
+- expand: `bird thread <id> --json-full` + `bird replies <id> --all --max-pages N --json-full`
+- account: `bird user-tweets <handle> -n N --json-full` (+ optional about / mentions)
+- lookup: `bird read <id> --json-full`
 - trend: `bird news --with-tweets --json` + `bird trending --json`
 
-All secret values (AUTH_TOKEN / CT0) are passed via environment variables
-only. We do not log secret values.
+Tweet commands use `--json-full` so normalize_tweet can lift views, bookmarks,
+lang, source and author profile metrics from `_raw`; `_raw` is not kept.
+
+Auth: AUTH_TOKEN / CT0 from the environment, or bird's own cookie store
+(browser profile / ~/.config/bird) when `bird check` passes. We never log
+secret values.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -55,8 +60,41 @@ def _is_installed() -> bool:
     return shutil.which(BIRD_BIN) is not None
 
 
-def _has_auth() -> bool:
+def _has_env_auth() -> bool:
     return bool(os.environ.get("AUTH_TOKEN")) and bool(os.environ.get("CT0"))
+
+
+_BROWSER_AUTH: Optional[bool] = None
+
+
+def _has_browser_auth() -> bool:
+    """bird can resolve cookies itself (browser profile / ~/.config/bird).
+
+    `bird check` exits 0 and reports auth_token/ct0 when that works. Cached per
+    process so each subcommand pays the check once.
+    """
+    global _BROWSER_AUTH
+    if _BROWSER_AUTH is None:
+        try:
+            proc = subprocess.run([BIRD_BIN, "--plain", "check"], capture_output=True, text=True,
+                                  timeout=20, check=False)
+            out = (proc.stdout + proc.stderr).lower()
+            _BROWSER_AUTH = proc.returncode == 0 and "auth_token" in out and "ct0" in out and "missing" not in out
+        except Exception:
+            _BROWSER_AUTH = False
+    return _BROWSER_AUTH
+
+
+def _has_auth() -> bool:
+    return _has_env_auth() or (_is_installed() and _has_browser_auth())
+
+
+def auth_source() -> Optional[str]:
+    if _has_env_auth():
+        return "env"
+    if _is_installed() and _has_browser_auth():
+        return "bird_cookie_store"
+    return None
 
 
 def _run(args: List[str], scope: str = "global", timeout: int = DEFAULT_TIMEOUT_SEC) -> BirdCallResult:
@@ -76,7 +114,7 @@ def _run(args: List[str], scope: str = "global", timeout: int = DEFAULT_TIMEOUT_
             ok=False,
             error=BirdError(
                 code="BIRD_AUTH_MISSING",
-                message="AUTH_TOKEN / CT0 are not set. Configure them in the aachat env provider, run `aachat up`, then re-run the session.",
+                message="AUTH_TOKEN / CT0 are not set and bird could not read browser cookies. Log in to x.com in Chrome, or configure AUTH_TOKEN / CT0 in the aachat env provider, then re-run.",
                 recoverable=True,
                 scope=scope,
             ),
@@ -181,64 +219,164 @@ def _to_int(v: Any) -> Optional[int]:
         return None
 
 
-def _to_iso(v: Any) -> Optional[str]:
-    if not v:
-        return None
-    if isinstance(v, str):
-        return v
+def _first(*values: Any) -> Any:
+    """First value that is not None (unlike `a or b`, keeps 0 and "")."""
+    for v in values:
+        if v is not None:
+            return v
     return None
+
+
+def _to_iso(v: Any) -> Optional[str]:
+    """Normalize bird/GraphQL dates ("Tue Sep 29 03:11:47 +0000 2026") to ISO 8601 UTC."""
+    if not v or not isinstance(v, str):
+        return None
+    s = v.strip()
+    for fmt in ("%a %b %d %H:%M:%S %z %Y",):
+        try:
+            return datetime.strptime(s, fmt).astimezone(timezone.utc).isoformat()
+        except ValueError:
+            pass
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc).isoformat()
+    except ValueError:
+        return s
+
+
+_SOURCE_RE = re.compile(r">([^<]+)<")
+
+
+def _raw_extras(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Pull metrics / author profile that only exist in `--json-full` `_raw`."""
+    r = raw.get("_raw")
+    if not isinstance(r, dict):
+        return {}
+    if r.get("__typename") == "TweetWithVisibilityResults" and isinstance(r.get("tweet"), dict):
+        r = r["tweet"]
+    legacy = r.get("legacy") or {}
+    user = ((r.get("core") or {}).get("user_results") or {}).get("result") or {}
+    ulegacy = user.get("legacy") or {}
+    ucore = user.get("core") or {}
+    source = r.get("source") or ""
+    m = _SOURCE_RE.search(source)
+    return {
+        "views": _to_int((r.get("views") or {}).get("count")),
+        "quotes": _to_int(legacy.get("quote_count")),
+        "bookmarks": _to_int(legacy.get("bookmark_count")),
+        "lang": legacy.get("lang"),
+        "source": m.group(1) if m else (source or None),
+        "is_reply": bool(legacy.get("in_reply_to_status_id_str")),
+        "links": _expanded_links(r, legacy),
+        "user": {
+            "followers_count": _to_int(ulegacy.get("followers_count")),
+            "following_count": _to_int(ulegacy.get("friends_count")),
+            "listed_count": _to_int(ulegacy.get("listed_count")),
+            "description": ulegacy.get("description")
+                           or ((user.get("profile_bio") or {}).get("description")),
+            "created_at": _to_iso(ucore.get("created_at") or ulegacy.get("created_at")),
+            "default_profile": ulegacy.get("default_profile"),
+            "blue_verified": user.get("is_blue_verified"),
+        } if user else {},
+    }
+
+
+def _expanded_links(r: Dict[str, Any], legacy: Dict[str, Any]) -> List[str]:
+    """t.co hides where a post points (GitHub, articles); lift expanded URLs."""
+    note = (((r.get("note_tweet") or {}).get("note_tweet_results") or {}).get("result") or {})
+    urls = ((note.get("entity_set") or {}).get("urls") or []) + ((legacy.get("entities") or {}).get("urls") or [])
+    out: List[str] = []
+    for u in urls:
+        e = u.get("expanded_url") if isinstance(u, dict) else None
+        if e and e not in out:
+            out.append(e)
+    return out
+
+
+def _author_quality(user: Dict[str, Any]) -> Optional[float]:
+    if not user or user.get("followers_count") is None:
+        return None
+    import _noise  # type: ignore[import-not-found]  # local import avoids a cycle at module load
+    return _noise.author_quality({
+        "public_metrics": {
+            "followers_count": user.get("followers_count"),
+            "following_count": user.get("following_count"),
+            "listed_count": user.get("listed_count"),
+        },
+        "created_at": user.get("created_at"),
+        "description": user.get("description"),
+        "default_profile": user.get("default_profile"),
+    })
+
+
+def _quoted_summary(q: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(q, dict) or not q.get("id"):
+        return None
+    a = q.get("author") or {}
+    handle = _normalize_handle_str(a.get("username") if isinstance(a, dict) else a)
+    return {
+        "source_id": str(q["id"]),
+        "url": f"https://x.com/{handle}/status/{q['id']}" if handle else None,
+        "author_handle": f"@{handle}" if handle else None,
+        "text": q.get("text"),
+        "likes": _to_int(q.get("likeCount")),
+    }
 
 
 def normalize_tweet(raw: Dict[str, Any], stage: str = "discovery") -> Dict[str, Any]:
     """Map a bird tweet JSON into the common item shape.
 
-    Bird tweets observed (per x-research-methods.md L11-13) contain at minimum:
-    id, text, author, authorId, conversationId, createdAt, likeCount,
-    replyCount, retweetCount. quoteCount, viewCount, url may also appear.
+    Bird `--json` tweets carry: id, text, author{username,name}, authorId,
+    conversationId, createdAt (Twitter date format), likeCount, replyCount,
+    retweetCount, optional quotedTweet / media. With `--json-full` the `_raw`
+    GraphQL payload adds views, quotes, bookmarks, lang, source and the
+    author's profile metrics, which we lift here and then discard.
     """
     if not isinstance(raw, dict):
         return {}
     source_id = str(raw.get("id") or raw.get("tweetId") or raw.get("rest_id") or "")
     if not source_id:
         return {}
+    extras = _raw_extras(raw)
+    user = extras.get("user") or {}
 
     author_field = raw.get("author") or {}
     if isinstance(author_field, str):
-        author_handle = _normalize_handle_str(author_field)
-        author_name = None
-        author_followers = None
-        author_verified = None
-    else:
-        author_handle = _normalize_handle_str(author_field.get("username") or author_field.get("screen_name") or author_field.get("handle"))
-        author_name = author_field.get("name") or author_field.get("displayName")
-        author_followers = _to_int(author_field.get("followersCount") or author_field.get("followers_count"))
-        author_verified = author_field.get("verified") or author_field.get("isVerified")
+        author_field = {"username": author_field}
+    author_handle = _normalize_handle_str(author_field.get("username") or author_field.get("screen_name") or author_field.get("handle"))
+    author_name = author_field.get("name") or author_field.get("displayName")
+    author_followers = _to_int(_first(author_field.get("followersCount"), author_field.get("followers_count"),
+                                      user.get("followers_count")))
+    author_verified = _first(author_field.get("verified"), author_field.get("isVerified"), user.get("blue_verified"))
 
     url = raw.get("url")
     if not url and author_handle and source_id:
         url = f"https://x.com/{author_handle.lstrip('@')}/status/{source_id}"
 
-    return {
+    item = {
         "url": url,
         "source_id": source_id,
         "author": {
             "name": author_name,
             "handle": f"@{author_handle.lstrip('@')}" if author_handle else None,
             "url": f"https://x.com/{author_handle.lstrip('@')}" if author_handle else None,
-            "source": None,
+            "source": extras.get("source"),
             "followers": author_followers,
+            "following": user.get("following_count"),
             "verified": bool(author_verified) if author_verified is not None else None,
-            "quality": None,
+            "bio": user.get("description"),
+            "quality": _author_quality(user),
         },
         "published_at": _to_iso(raw.get("createdAt") or raw.get("created_at")),
-        "text": raw.get("text") or raw.get("fullText") or raw.get("full_text"),
+        "text": _first(raw.get("text"), raw.get("fullText"), raw.get("full_text")),
         "metrics": {
-            "likes": _to_int(raw.get("likeCount") or raw.get("favorite_count")),
-            "reposts": _to_int(raw.get("retweetCount") or raw.get("retweet_count")),
-            "replies": _to_int(raw.get("replyCount") or raw.get("reply_count")),
-            "quotes": _to_int(raw.get("quoteCount") or raw.get("quote_count")),
-            "views": _to_int(raw.get("viewCount") or raw.get("view_count")),
+            "likes": _to_int(_first(raw.get("likeCount"), raw.get("favorite_count"))),
+            "reposts": _to_int(_first(raw.get("retweetCount"), raw.get("retweet_count"))),
+            "replies": _to_int(_first(raw.get("replyCount"), raw.get("reply_count"))),
+            "quotes": _to_int(_first(raw.get("quoteCount"), raw.get("quote_count"), extras.get("quotes"))),
+            "views": _to_int(_first(raw.get("viewCount"), raw.get("view_count"), extras.get("views"))),
+            "bookmarks": extras.get("bookmarks"),
         },
+        "conversation_id": raw.get("conversationId"),
         "matched_terms": [],
         "why_selected": None,
         "provenance": {
@@ -248,6 +386,17 @@ def normalize_tweet(raw: Dict[str, Any], stage: str = "discovery") -> Dict[str, 
         },
         "limitations": [],
     }
+    if extras.get("links"):
+        item["links"] = extras["links"]
+    if extras.get("lang"):
+        item["lang"] = extras["lang"]
+    quoted = _quoted_summary(raw.get("quotedTweet"))
+    if quoted:
+        item["quoted"] = quoted
+    media = raw.get("media")
+    if isinstance(media, list) and media:
+        item["media"] = [m.get("type") for m in media if isinstance(m, dict) and m.get("type")]
+    return item
 
 
 def _normalize_handle_str(h: Any) -> str:
@@ -281,7 +430,7 @@ def diagnose() -> Tuple[Dict[str, Any], List[BirdError]]:
         status["reason"] = "missing_cookie"
         errors.append(BirdError(
             code="BIRD_AUTH_MISSING",
-            message="AUTH_TOKEN / CT0 are not set.",
+            message="AUTH_TOKEN / CT0 are not set and bird could not read browser cookies.",
             recoverable=True,
             scope="diagnose",
         ))
@@ -360,8 +509,8 @@ def diagnose() -> Tuple[Dict[str, Any], List[BirdError]]:
 
 def search(query: str, limit: int, max_fetch: int) -> BirdCallResult:
     """Run `bird search <query> -n N --json`. Returns raw list of tweets."""
-    n = max(1, min(int(max_fetch or limit), 100))
-    args = ["search", query, "-n", str(n), "--json"]
+    n = max(1, min(int(max_fetch or limit), 500))
+    args = ["search", query, "-n", str(n), "--json-full"]
     res = _run(args, scope="discovery")
     if not res.ok:
         return res
@@ -371,7 +520,7 @@ def search(query: str, limit: int, max_fetch: int) -> BirdCallResult:
 
 
 def thread(post_id: str) -> BirdCallResult:
-    res = _run(["thread", post_id, "--json"], scope="expand")
+    res = _run(["thread", post_id, "--json-full"], scope="expand")
     if not res.ok:
         return res
     tweets = _extract_tweets(res.data)
@@ -380,7 +529,7 @@ def thread(post_id: str) -> BirdCallResult:
 
 
 def replies(post_id: str, max_pages: int = 2) -> BirdCallResult:
-    args = ["replies", post_id, "--all", "--max-pages", str(max(1, int(max_pages))), "--json"]
+    args = ["replies", post_id, "--all", "--max-pages", str(max(1, int(max_pages))), "--json-full"]
     res = _run(args, scope="expand")
     if not res.ok:
         return res
@@ -391,7 +540,7 @@ def replies(post_id: str, max_pages: int = 2) -> BirdCallResult:
 
 def user_tweets(handle: str, n: int = 50) -> BirdCallResult:
     handle = handle if handle.startswith("@") else f"@{handle}"
-    args = ["user-tweets", handle, "-n", str(max(1, int(n))), "--json"]
+    args = ["user-tweets", handle, "-n", str(max(1, int(n))), "--json-full"]
     res = _run(args, scope="account")
     if not res.ok:
         return res
@@ -402,7 +551,7 @@ def user_tweets(handle: str, n: int = 50) -> BirdCallResult:
 
 def user_mentions(handle: str, n: int = 30) -> BirdCallResult:
     handle = handle if handle.startswith("@") else f"@{handle}"
-    args = ["mentions", "--user", handle, "-n", str(max(1, int(n))), "--json"]
+    args = ["mentions", "--user", handle, "-n", str(max(1, int(n))), "--json-full"]
     res = _run(args, scope="account")
     if not res.ok:
         return res
@@ -417,7 +566,7 @@ def about(handle: str) -> BirdCallResult:
 
 
 def read_post(post_id: str) -> BirdCallResult:
-    res = _run(["read", post_id, "--json"], scope="lookup")
+    res = _run(["read", post_id, "--json-full"], scope="lookup")
     if not res.ok:
         return res
     if isinstance(res.data, dict):

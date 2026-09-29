@@ -98,6 +98,7 @@ class NoiseOptions:
     recommend_excludes: bool = True
     same_author_limit: Optional[int] = None
     knowledge_dir: Optional[str] = None  # resolved from skill dir at runtime
+    query_terms: List[str] = field(default_factory=list)  # never treat these as spam
 
 
 @dataclass
@@ -359,6 +360,10 @@ def apply_filters(items: List[Dict[str, Any]], opts: NoiseOptions,
         path = _resolve_noise_phrases_path(opts)
         if path:
             spam_phrases = _load_lines(path)
+    # A phrase the user is searching for (e.g. 副業) is the topic, not noise.
+    q_terms = [t.lower() for t in opts.query_terms if t]
+    spam_phrases = [p for p in spam_phrases
+                    if not any(p.lower() in t or t in p.lower() for t in q_terms)]
     spam_lower = [p.lower() for p in spam_phrases]
     for it in quality_kept:
         text_lower = (it.get("text") or "").lower()

@@ -13,6 +13,21 @@ X 調査の一次取得を行う skill。`bird` / X API / Web 補助の使い分
 
 agent は X の検索演算子を直接書かず、構造化フィールド (`--keywords` / `--any-of` / `--exclude` / `--hashtags` / `--from-accounts` など) で意図を渡す。スクリプト側で bird と X API それぞれの query 文字列に翻訳する。
 
+## クイックスタート
+
+```bash
+# まず認証確認（bird は Chrome の x.com ログイン Cookie を自動で使える）
+python3 .agents/skills/x-search/scripts/search.py diagnose --format markdown
+
+# 期間内の「注目投稿」を集める（既定 sort=top）。JSON と同名 .md を両方保存し、stdout は 1 行サマリだけ
+python3 .agents/skills/x-search/scripts/search.py search \
+  --keywords "Claude Code" --any-of 不満 困る 辛い \
+  --language ja --period 30d --limit 20 -o /tmp/x/claude-code-pain.json
+```
+
+- `-o x.json` は `x.json` と `x.md` を 1 回の取得で書き出す。大きい JSON を会話に流さずに済むので、調査では基本 `-o` を使う。
+- Markdown には本文全文、JST 日時、♥/RT/返信/引用/表示/ブックマーク、投稿者の followers、引用元、展開済みリンクが入る。
+
 ## いつ呼ぶか
 
 - `x-search-plan` skill が「次に試す検索条件」を決めたあと、最初の事実取得を行うとき。
@@ -57,6 +72,7 @@ agent は X の検索演算子を直接書かず、構造化フィールド (`--
 --max-fetch <int>               # 内部取得上限
 --tool <auto|bird|x_api>        # auto は diagnose 結果で選ぶ
 --format <json|markdown>
+--output, -o <path>             # ファイルに書き出し stdout は 1 行サマリ。x.json なら x.md も同時に書く
 --debug                         # raw に近い補助情報を一時ファイル出力
 ```
 
@@ -65,7 +81,8 @@ agent は X の検索演算子を直接書かず、構造化フィールド (`--
 agent は構造化フィールドで意図を渡す。複数値はオプションを繰り返し指定する。
 
 ```text
---keywords <str>           # AND 結合される必須語（繰り返し可）
+--keywords <str>           # AND 結合される必須語（繰り返し可）。スペースを含む語 ("AI agents") はフレーズ扱い。
+                           # 単語ごとの AND にしたい場合は --keywords AI --keywords agents と分ける
 --phrases <str>            # "exact phrase" として AND 結合（繰り返し可）
 --any-of <str> [<str> ...] # OR グループ。1 回 = 1 グループ。
                            # `--any-of A B` または `--any-of A,B` で同じ OR 群。
@@ -79,13 +96,31 @@ agent は構造化フィールドで意図を渡す。複数値はオプショ�
 --exclude-types <str>      # retweet|reply|quote
 --min-followers <int>      # followers_count:<min>..
 --max-followers <int>      # followers_count:..<max>
---min-likes <int>          # 後段の noise filter で使う
---min-replies <int>
---sort <recency|relevancy|engagement>
+--min-likes <int>          # bird: クエリに min_faves:N を付与。X API: 取得後フィルタ
+--min-replies <int>        # bird: min_replies:N
+--min-reposts <int>        # bird: min_retweets:N
+--sort <top|recency|relevancy|engagement>   # default top（下記）
+--include-retweets         # 既定では -is:retweet を付ける。RT も数えたいときだけ指定
 --raw-query <str>          # 排他。指定時は構造化フィールド無視
 ```
 
 `--raw-query` はエスケープハッチ。構造化フィールドで表現できないときだけ使う。
+
+### `--sort top`（既定）の挙動
+
+bird の検索は X の「最新」タブ固定で、「話題」タブを選べない。そのまま `--period 7d` で 30 件取ると、実際には直近数分の投稿しか返らず、ほぼ全件 ♥0 になる（実測）。
+
+そこで `top` は `min_faves:1000 → 200 → 50 → 10 → 0` の順に段階的に検索し、上位の段から埋める。1 段が取れる件数は取得枠の約半分までに抑え、バズ投稿だけで埋まらないようにしている。各 item の `provenance.tier` にどの段で拾ったかが入る。
+
+- 新着・リアルタイムの声を見たい → `--sort recency`（エンゲージメント下限なし、新しい順）
+- 下限を自分で決めたい → `--min-likes N`（段階検索はせず 1 クエリ）
+- `--raw-query` に `min_faves:` が含まれる場合も段階検索はしない
+
+### 期間 `--period`
+
+- `24h` / `7d` / `30d` / `90d`: bird は秒単位の `since_time:<unix>` を使う（日付単位の since/until では 24h が最大 48h に広がり、当日分が落ちていた）。
+- `YYYY-MM-DD..YYYY-MM-DD`: 終了日を含む。bird は `until:` に終了日 +1 日を入れる。
+- bird（Web 検索）は 7 日より前も取れる。X API Recent Search は直近 7 日のみ。
 
 ## サブコマンド固有オプション
 
@@ -310,11 +345,11 @@ agent は構造化フィールドで意図を渡す。複数値はオプショ�
 
 | secret 名 | 用途 | 必須 | 備考 |
 |---|---|---|---|
-| `AUTH_TOKEN` | bird Cookie 認証 | 任意 | bird を使う場合のみ必要 |
-| `CT0` | bird Cookie 認証 | 任意 | bird を使う場合のみ必要 |
+| `AUTH_TOKEN` | bird Cookie 認証 | 任意 | 未設定でも bird が Chrome の x.com Cookie（または `~/.config/bird/config.json5`）を読めれば不要 |
+| `CT0` | bird Cookie 認証 | 任意 | 同上 |
 | `X_BEARER_TOKEN` | X API v2 | 任意 | X API を使う場合のみ必要 |
 
-未設定の場合は構造化エラー（`BIRD_AUTH_MISSING` / `API_TOKEN_MISSING`）を返し、`next_human_actions` に「aachat env provider に設定して `aachat up` 後に再実行する」を入れる。
+bird の認証は env（`AUTH_TOKEN` / `CT0`）を優先し、なければ `bird check` が通る Cookie ストア（ブラウザ / bird 設定）を使う。`diagnose` の `credentials.bird.auth_source` が `env` か `bird_cookie_store` かを示す。どちらも無い場合は構造化エラー（`BIRD_AUTH_MISSING` / `API_TOKEN_MISSING`）を返し、`next_human_actions` に「aachat env provider に設定して `aachat up` 後に再実行する」を入れる。
 
 ## 実行例
 
@@ -336,10 +371,16 @@ python3 .agents/skills/x-search/scripts/search.py search \
   --any-of "生成AI" "LLM" \
   --any-of "勉強法" "学習" \
   --exclude 求人 --exclude 採用 \
-  --exclude-types retweet \
-  --sort recency \
   --tool auto \
-  --format json
+  -o /tmp/x/genai-study.json
+
+# 直近の生の声を新しい順に（エンゲージメント下限なし）
+python3 .agents/skills/x-search/scripts/search.py search \
+  --keywords "Sonnet 5.5" --language ja --period 24h --sort recency --limit 30 -o /tmp/x/sonnet-latest.json
+
+# 特定アカウントの注目投稿（from: 検索では同一投稿者の件数上限は無効）
+python3 .agents/skills/x-search/scripts/search.py search \
+  --from-accounts AnthropicAI --period 30d --limit 10 -o /tmp/x/anthropic.json
 ```
 
 ### expand
@@ -415,8 +456,23 @@ python3 .agents/skills/x-search/scripts/search.py graph \
 
 出力の `candidates[]` は各候補について `overlap_count`（フォローしている seed の数）、`matched_seeds[]`、`followers_count` / `following_count` / `blue_verified` / `created_at` / `bio` を持つ。`graph_summary` に mode・seed 数・候補プール規模・返却数が入る。これらは事実なので、ファクトレポート（`x-search-report`）の代表候補セクションに転記し、「だから声をかける価値がある」という判断は `x-search-insight` に回す。
 
+## item の追加フィールド（bird）
+
+bird の呼び出しは `--json-full` で行い、GraphQL の生データから下記を取り出したうえで生データは捨てる。
+
+- `metrics.views` / `metrics.quotes` / `metrics.bookmarks`
+- `author.followers` / `author.following` / `author.bio` / `author.verified`（青バッジ） / `author.quality`（プロフィールから算出）
+- `author.source`: 投稿クライアント（Buffer などの自動投稿は `automated_source` として除外される）
+- `lang`: 言語判定。`--language` と食い違う投稿は `language_mismatch` で除外
+- `published_at`: ISO 8601 (UTC)。Markdown では JST 表示
+- `quoted`: 引用元投稿（`source_id` / `url` / `author_handle` / `text` / `likes`）。キーワード照合は引用元本文も対象
+- `links`: t.co を展開した URL（GitHub・記事など）
+- `media`: `photo` / `video` など
+- `conversation_id`: `expand` に渡すスレッド ID
+
 ## 出力の使い方
 
+- 除外が多いときは `excluded_summary.by_reason` を見る。`no_matched_terms` は X 側のゆるい一致（別スレッドの語、URL 内の語）を落としたもの、`same_author_limit` は検索結果の多様化用で、`account` / `expand` / `from:` 検索では無効。
 - agent は `items[]` を読み、ファクトレポート（`x-search-report` skill）の代表投稿セクションに転記する。
 - `excluded_summary.by_reason[]` を見て、ノイズが多すぎる場合 (`QUERY_TOO_BROAD`) には `queries_built.recommended_excludes[]` を次ターンの `--exclude` に加える。
 - `search_quality` を見て、採用投稿の偏り、検索軸の薄さ、反証不足を判断する。スコアは絶対評価ではなく、次検索の優先順位付けに使う。

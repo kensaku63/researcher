@@ -113,6 +113,9 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-fetch", type=int)
     parser.add_argument("--tool", choices=["auto", "bird", "x_api"], default="auto")
     parser.add_argument("--format", choices=["json", "markdown"], default="json")
+    parser.add_argument("--output", "-o",
+                        help="Write the result to this path and print only a one-line summary. "
+                             "x.json also writes x.md; x.md writes markdown only.")
     parser.add_argument("--debug", action="store_true")
 
 
@@ -132,9 +135,16 @@ def _add_search_fields(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--exclude-types", dest="exclude_types", action="append", nargs="+", default=[])
     parser.add_argument("--min-followers", dest="min_followers", type=int)
     parser.add_argument("--max-followers", dest="max_followers", type=int)
-    parser.add_argument("--min-likes", dest="min_likes", type=int)
+    parser.add_argument("--min-likes", dest="min_likes", type=int,
+                        help="Engagement floor. bird: min_faves:N in the query; X API: post-fetch filter.")
     parser.add_argument("--min-replies", dest="min_replies", type=int)
-    parser.add_argument("--sort", choices=["recency", "relevancy", "engagement"])
+    parser.add_argument("--min-reposts", dest="min_reposts", type=int)
+    parser.add_argument("--sort", choices=["top", "recency", "relevancy", "engagement"], default="top",
+                        help="top (default): bird has no Top tab, so fetch in min_faves tiers "
+                             "(high to low) to sample notable posts across the whole period. "
+                             "recency: newest first, no engagement floor.")
+    parser.add_argument("--include-retweets", dest="include_retweets", action="store_true",
+                        help="Keep retweets. By default search adds -is:retweet.")
     parser.add_argument("--raw-query", dest="raw_query")
 
 
@@ -282,6 +292,11 @@ def _flatten_csv(values: Any) -> List[str]:
 
 
 def _structured_from_args(args: argparse.Namespace) -> qb.StructuredQuery:
+    exclude_types = _flatten_csv(getattr(args, "exclude_types", []))
+    include_types = _flatten_csv(getattr(args, "include_types", []))
+    if (hasattr(args, "include_retweets") and not args.include_retweets
+            and "retweet" not in exclude_types and "retweet" not in include_types):
+        exclude_types.append("retweet")
     any_of_groups: List[List[str]] = []
     for raw in getattr(args, "any_of", []) or []:
         values: List[str] = raw if isinstance(raw, list) else [raw]
@@ -304,10 +319,13 @@ def _structured_from_args(args: argparse.Namespace) -> qb.StructuredQuery:
         from_accounts=_flatten_csv(getattr(args, "from_accounts", [])),
         to_accounts=_flatten_csv(getattr(args, "to_accounts", [])),
         mentions=_flatten_csv(getattr(args, "mentions", [])),
-        include_types=_flatten_csv(getattr(args, "include_types", [])),
-        exclude_types=_flatten_csv(getattr(args, "exclude_types", [])),
+        include_types=include_types,
+        exclude_types=exclude_types,
         min_followers=getattr(args, "min_followers", None),
         max_followers=getattr(args, "max_followers", None),
+        min_likes=getattr(args, "min_likes", None),
+        min_replies=getattr(args, "min_replies", None),
+        min_reposts=getattr(args, "min_reposts", None),
         language=getattr(args, "language", None),
         period=getattr(args, "period", None),
         sort=getattr(args, "sort", None),
@@ -566,12 +584,18 @@ def _finalize(env: Dict[str, Any], args: argparse.Namespace,
         matched_terms_for = None
 
     opts = _noise_options(args)
+    opts.query_terms = _structured_terms(structured)
+    single_author = structured is None or bool(structured.from_accounts) or "from:" in (structured.raw_query or "")
     # account / expand / lookup pass structured=None — there are no search
     # terms to "match", so dropping items by require_matched_terms would
     # wipe out a legitimate account timeline or thread. Disable that filter
     # for term-less scopes.
     if structured is None:
         opts.require_matched_terms = False
+    # An account timeline, a thread or a from: search is one author by design;
+    # the per-author cap exists to diversify keyword search results only.
+    if single_author and opts.same_author_limit is None:
+        opts.same_author_limit = 10 ** 6
     kept, excluded, recommended = _noise.apply_filters(raw_items, opts, matched_terms_for)
 
     purpose = getattr(args, "purpose", None) or "market_research"
@@ -585,6 +609,14 @@ def _finalize(env: Dict[str, Any], args: argparse.Namespace,
                                     from_accounts=from_accounts, mentions=mentions)
     limit = max(1, int(getattr(args, "limit", 20)))
     picked = _normalize.representative_pick(scored, limit=limit)
+    score_by_id = {it.get("source_id"): sc for it, sc in scored}
+    if env["tool"] == "expand":
+        # Read a conversation top-down.
+        picked.sort(key=lambda it: it.get("published_at") or "")
+    elif getattr(args, "sort", None) == "recency" or structured is None:
+        picked.sort(key=lambda it: it.get("published_at") or "", reverse=True)
+    else:
+        picked.sort(key=lambda it: score_by_id.get(it.get("source_id"), 0.0), reverse=True)
     _normalize.attach_why_selected(picked, purpose=purpose)
 
     env["items"] = picked
@@ -619,6 +651,53 @@ def handle_diagnose(args: argparse.Namespace) -> Dict[str, Any]:
             "Configure AUTH_TOKEN / CT0 (bird) or X_BEARER_TOKEN (X API) in the aachat env provider, run `aachat up`, then re-run."
         )
     return env
+
+
+# bird search is hard-wired to the "Latest" tab, so a plain query returns only
+# the last few minutes of a busy topic. Walking min_faves tiers from high to low
+# approximates the "Top" tab and spreads the sample across the whole period.
+TOP_TIERS = (1000, 200, 50, 10, 0)
+
+
+def _bird_top_tiers(env: Dict[str, Any], base_query: str, want: int) -> List[Dict[str, Any]]:
+    collected: List[Dict[str, Any]] = []
+    seen: set = set()
+    # No single tier may take more than ~half the pool, so viral posts do not
+    # crowd out mid-engagement practitioners.
+    per_tier_cap = max(10, (want + 1) // 2)
+    for floor in TOP_TIERS:
+        remaining = want - len(collected)
+        if remaining <= 0:
+            break
+        n = remaining if floor == TOP_TIERS[-1] else min(remaining, per_tier_cap)
+        query = f"{base_query} min_faves:{floor}" if floor else base_query
+        res = _bird.search(query, limit=n, max_fetch=n)
+        env["usage"]["bird_calls"] = env["usage"].get("bird_calls", 0) + 1
+        if not res.ok:
+            if res.error:
+                _add_limitation(env, res.error.code, res.error.message, res.error.recoverable, "discovery")
+                if not res.error.recoverable or res.error.code == "BIRD_RATE_LIMITED":
+                    break
+            continue
+        added = 0
+        for t in res.data or []:
+            item = _bird.normalize_tweet(t, stage="discovery")
+            if item and item["source_id"] not in seen:
+                seen.add(item["source_id"])
+                item["provenance"]["tier"] = f"min_faves:{floor}"
+                collected.append(item)
+                added += 1
+        _push_query_tried(env, "discovery", "bird", query, added, res.elapsed_ms)
+    return collected
+
+
+def _meets_engagement_floor(item: Dict[str, Any], structured: qb.StructuredQuery) -> bool:
+    m = item.get("metrics") or {}
+    for key, floor in (("likes", structured.min_likes), ("replies", structured.min_replies),
+                       ("reposts", structured.min_reposts)):
+        if floor and (m.get(key) or 0) < floor:
+            return False
+    return True
 
 
 def handle_search(args: argparse.Namespace) -> Dict[str, Any]:
@@ -671,15 +750,20 @@ def handle_search(args: argparse.Namespace) -> Dict[str, Any]:
     # Discovery stage (bird preferred).
     if use_bird:
         discovery_n = min(30, max(5, int(args.limit) // 2)) if use_api else max_fetch
-        res = _bird.search(built["bird"], limit=discovery_n, max_fetch=discovery_n)
-        env["usage"]["bird_calls"] = env["usage"].get("bird_calls", 0) + 1
-        if res.ok and isinstance(res.data, list):
-            normalized = [_bird.normalize_tweet(t, stage="discovery") for t in res.data]
-            normalized = [n for n in normalized if n]
-            raw_items.extend(normalized)
-            _push_query_tried(env, "discovery", "bird", built["bird"], len(normalized), res.elapsed_ms)
-        elif res.error:
-            _add_limitation(env, res.error.code, res.error.message, res.error.recoverable, "discovery")
+        tiered = (getattr(args, "sort", None) == "top" and not structured.min_likes
+                  and "min_faves:" not in (structured.raw_query or ""))
+        if tiered:
+            raw_items.extend(_bird_top_tiers(env, built["bird"], discovery_n))
+        else:
+            res = _bird.search(built["bird"], limit=discovery_n, max_fetch=discovery_n)
+            env["usage"]["bird_calls"] = env["usage"].get("bird_calls", 0) + 1
+            if res.ok and isinstance(res.data, list):
+                normalized = [_bird.normalize_tweet(t, stage="discovery") for t in res.data]
+                normalized = [n for n in normalized if n]
+                raw_items.extend(normalized)
+                _push_query_tried(env, "discovery", "bird", built["bird"], len(normalized), res.elapsed_ms)
+            elif res.error:
+                _add_limitation(env, res.error.code, res.error.message, res.error.recoverable, "discovery")
 
     # Collection stage (X API for reproducibility).
     if use_api:
@@ -699,6 +783,7 @@ def handle_search(args: argparse.Namespace) -> Dict[str, Any]:
         env["usage"]["x_api_post_reads"] = env["usage"].get("x_api_post_reads", 0) + min(max_fetch, 100)
         if res.ok:
             api_items = _x_api.items_from_response(res.data, stage="collection")
+            api_items = [it for it in api_items if _meets_engagement_floor(it, structured)]
             raw_items.extend(api_items)
             _push_query_tried(env, "collection", "x_api", built["x_api"], len(api_items),
                               res.elapsed_ms, next_token=res.next_token)
@@ -1250,47 +1335,106 @@ HANDLERS = {
 }
 
 
-def _to_markdown(env: Dict[str, Any]) -> str:
-    """Minimal Markdown rendering for human eyes. JSON remains canonical."""
-    lines: List[str] = []
-    lines.append(f"# x-search result ({env['tool']})")
-    lines.append("")
-    lines.append(f"- fetched_at: {env['fetched_at']}")
-    if env.get("purpose"):
-        lines.append(f"- purpose: {env['purpose']}")
-    if env.get("language"):
-        lines.append(f"- language: {env['language']}")
-    if env.get("period"):
-        lines.append(f"- period: {env['period']}")
-    lines.append(f"- bird: available={env['credentials']['bird']['available']}")
-    lines.append(f"- x_api: available={env['credentials']['x_api']['available']}")
+_JST = timezone(timedelta(hours=9))
 
-    if env.get("queries_built", {}).get("bird") or env.get("queries_built", {}).get("x_api"):
-        lines.append("\n## queries_built\n")
-        qb_ = env["queries_built"]
-        if qb_.get("bird"):
-            lines.append(f"- bird: `{qb_['bird']}`")
-        if qb_.get("x_api"):
-            lines.append(f"- x_api: `{qb_['x_api']}`")
+
+def _jst(iso: Optional[str]) -> str:
+    if not iso:
+        return "?"
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone(_JST).strftime("%Y-%m-%d %H:%M JST")
+    except ValueError:
+        return str(iso)
+
+
+def _num(v: Any) -> str:
+    if v is None:
+        return "-"
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if n >= 10000:
+        return f"{n / 10000:.1f}万"
+    return f"{n:,}"
+
+
+def _quote_block(text: str) -> List[str]:
+    return ["> " + ln if ln.strip() else ">" for ln in (text or "").strip().splitlines()] or [">"]
+
+
+def _item_markdown(i: int, it: Dict[str, Any]) -> List[str]:
+    a = it.get("author") or {}
+    m = it.get("metrics") or {}
+    who = a.get("handle") or "?"
+    if a.get("name"):
+        who += f"（{a['name']}"
+        who += f" / followers {_num(a.get('followers'))}）" if a.get("followers") is not None else "）"
+    out = [f"### {i}. {who}", ""]
+    stats = [f"♥ {_num(m.get('likes'))}", f"RT {_num(m.get('reposts'))}", f"返信 {_num(m.get('replies'))}",
+             f"引用 {_num(m.get('quotes'))}", f"表示 {_num(m.get('views'))}"]
+    if m.get("bookmarks") is not None:
+        stats.append(f"BM {_num(m.get('bookmarks'))}")
+    meta = f"{_jst(it.get('published_at'))} · " + " · ".join(stats)
+    if it.get("url"):
+        meta += f" · [post]({it['url']})"
+    out.append(meta)
+    out.append("")
+    out.extend(_quote_block(it.get("text") or ""))
+    q = it.get("quoted")
+    if q:
+        qtext = " ".join((q.get("text") or "").split())
+        out.append(">")
+        out.append(f"> 引用元 {q.get('author_handle') or ''}: {qtext[:280]}")
+    out.append("")
+    if it.get("links"):
+        out.append(f"- links: {' '.join(it['links'][:5])}")
+    if it.get("media"):
+        out.append(f"- media: {', '.join(it['media'])}")
+    if it.get("why_selected"):
+        out.append(f"- why_selected: {it['why_selected']}")
+    out.append("")
+    return out
+
+
+def _to_markdown(env: Dict[str, Any]) -> str:
+    """Human/agent-readable rendering. JSON remains canonical."""
+    lines: List[str] = []
+    qb_ = env.get("queries_built") or {}
+    title = qb_.get("bird") or qb_.get("x_api") or ""
+    lines.append(f"# x-search {env['tool']}" + (f": `{title}`" if title else ""))
+    lines.append("")
+    meta = [f"取得 {_jst(env['fetched_at'])}"]
+    for key in ("purpose", "language", "period"):
+        if env.get(key):
+            meta.append(f"{key}={env[key]}")
+    creds = env.get("credentials") or {}
+    meta.append(f"bird={'ok' if (creds.get('bird') or {}).get('available') else 'n/a'}")
+    meta.append(f"x_api={'ok' if (creds.get('x_api') or {}).get('available') else 'n/a'}")
+    lines.append("- " + " · ".join(meta))
+    fetched = sum(int(q.get("result_count") or 0) for q in env.get("queries_tried") or [])
+    excluded = (env.get("excluded_summary") or {}).get("total_excluded", 0)
+    if env.get("items") is not None and env["tool"] not in ("diagnose", "trend", "counts", "graph"):
+        lines.append(f"- 取得 {fetched} 件 → 除外 {excluded} 件 → 採用 {len(env.get('items') or [])} 件")
 
     if env.get("items"):
-        lines.append("\n## items\n")
+        lines.append(f"\n## 投稿 ({len(env['items'])})\n")
         for i, it in enumerate(env["items"], 1):
-            url = it.get("url") or ""
-            handle = (it.get("author") or {}).get("handle") or ""
-            text = (it.get("text") or "").replace("\n", " ")
-            metrics = it.get("metrics") or {}
-            lines.append(f"### {i}. {handle}")
-            if url:
-                lines.append(f"- URL: {url}")
-            if it.get("published_at"):
-                lines.append(f"- published_at: {it['published_at']}")
-            lines.append(f"- metrics: likes={metrics.get('likes')}, reposts={metrics.get('reposts')}, "
-                         f"replies={metrics.get('replies')}, quotes={metrics.get('quotes')}, views={metrics.get('views')}")
-            if it.get("why_selected"):
-                lines.append(f"- why_selected: {it['why_selected']}")
-            lines.append(f"- text: {text[:200]}")
-            lines.append("")
+            lines.extend(_item_markdown(i, it))
+
+    if env.get("counts"):
+        total = sum(int(r.get("count") or 0) for r in env["counts"])
+        lines.append(f"\n## counts (合計 {total:,})\n")
+        lines.append("| start (JST) | count |")
+        lines.append("|---|---:|")
+        for r in env["counts"]:
+            lines.append(f"| {_jst(r.get('start'))} | {r.get('count')} |")
+
+    if env.get("trends"):
+        lines.append("\n## trends\n")
+        for i, t in enumerate(env["trends"], 1):
+            vol = f" ({t['volume']})" if t.get("volume") else ""
+            lines.append(f"{i}. [{t.get('category')}] {t.get('name')}{vol}")
 
     if env.get("candidates"):
         summary = env.get("graph_summary") or {}
@@ -1310,6 +1454,24 @@ def _to_markdown(env: Dict[str, Any]) -> str:
                 lines.append(f"- bio: {str(c['bio']).replace(chr(10), ' ')[:200]}")
             lines.append("")
 
+    by_reason = (env.get("excluded_summary") or {}).get("by_reason") or []
+    if by_reason:
+        lines.append("\n## 除外内訳\n")
+        for r in by_reason:
+            extra = f" ({', '.join(r['matched_terms'])})" if r.get("matched_terms") else ""
+            lines.append(f"- {r['code']}: {r['count']}{extra}")
+
+    if env.get("next_query_candidates"):
+        lines.append("\n## 次の検索候補\n")
+        for c in env["next_query_candidates"]:
+            fields = json.dumps(c.get("suggested_fields") or {}, ensure_ascii=False)
+            lines.append(f"- **{c.get('kind')}**: {c.get('reason')} `{fields}`")
+
+    if env.get("queries_tried"):
+        lines.append("\n## queries_tried\n")
+        for q in env["queries_tried"]:
+            lines.append(f"- [{q.get('tool')}/{q.get('stage')}] `{q.get('query')}` → {q.get('result_count')} 件")
+
     if env.get("limitations"):
         lines.append("\n## limitations\n")
         for lim in env["limitations"]:
@@ -1321,6 +1483,20 @@ def _to_markdown(env: Dict[str, Any]) -> str:
             lines.append(f"- {a}")
 
     return "\n".join(lines) + "\n"
+
+
+def _summary_line(env: Dict[str, Any], path: str) -> str:
+    parts = [f"wrote {path}", f"tool={env['tool']}"]
+    for key in ("items", "trends", "counts", "candidates"):
+        if env.get(key):
+            parts.append(f"{key}={len(env[key])}")
+    ex = (env.get("excluded_summary") or {}).get("total_excluded")
+    if ex:
+        parts.append(f"excluded={ex}")
+    codes = sorted({lim.get("code") for lim in env.get("limitations") or []})
+    if codes:
+        parts.append("limitations=" + ",".join(codes))
+    return " ".join(parts) + "\n"
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1342,11 +1518,23 @@ def main(argv: Optional[List[str]] = None) -> int:
                         f"Unexpected internal error: {type(exc).__name__}",
                         recoverable=False, scope="global")
 
-    if getattr(args, "format", "json") == "markdown":
-        sys.stdout.write(_to_markdown(env))
+    output = getattr(args, "output", None)
+    as_markdown = getattr(args, "format", "json") == "markdown" or (output or "").endswith(".md")
+    rendered = _to_markdown(env) if as_markdown else json.dumps(env, ensure_ascii=False, indent=2) + "\n"
+    if output:
+        os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
+        with open(output, "w", encoding="utf-8") as f:
+            f.write(rendered)
+        written = [output]
+        # One fetch, both artifacts: JSON for x-search-report, Markdown for reading.
+        if output.endswith(".json"):
+            md_path = output[:-len(".json")] + ".md"
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(_to_markdown(env))
+            written.append(md_path)
+        sys.stdout.write(_summary_line(env, " + ".join(written)))
     else:
-        json.dump(env, sys.stdout, ensure_ascii=False, indent=2)
-        sys.stdout.write("\n")
+        sys.stdout.write(rendered)
     return 0
 
 

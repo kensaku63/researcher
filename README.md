@@ -31,4 +31,6 @@ python3 .agents/skills/x-search/scripts/search.py search --keywords "生成AI" -
 
 41ファイルの原本とのバイト一致、Python 10ファイルの構文、実行入口4本の `--help`、論文CLIの21ソース一覧を確認。YouTube/X APIのキー未設定時の診断も確認した。外部サービス全機能の実検索は未検証。Python依存は検証用環境へ導入済み。字幕の音声処理用 `ffmpeg` は宣言のみで、このSessionには未導入。
 
+2026-09-29に `x-search` をbird実検索で検証・改善した。bird はChromeのx.comログインCookieを自動で使えるため、`AUTH_TOKEN` / `CT0` 未設定でも動く。既定の `--sort top` は `min_faves` 段階検索で期間全体の注目投稿を集める（詳細は `x-search/SKILL.md`）。X API経路（`X_BEARER_TOKEN`）と `graph` は未検証。
+
 Skill簡易validatorは9件合格。原本の `paper-search` のdescription内の山括弧、`x-search` の `disable-model-invocation` はvalidatorで不合格となるが、丸ごとコピーする指定に従って変更していない。`x-search` は必要時にSkillを明示して使用する。

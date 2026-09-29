@@ -36,14 +36,26 @@ def detect_matched_terms(items: List[Dict[str, Any]], structured: qb.StructuredQ
         sid = str(it.get("source_id") or "")
         if not sid:
             continue
-        text = (it.get("text") or "").lower()
-        if not text:
+        # X matches quoted-post text too, and users write "ClaudeCode" /
+        # "Claude Code" interchangeably, so compare with whitespace removed.
+        text = " ".join([it.get("text") or "", (it.get("quoted") or {}).get("text") or ""]).lower()
+        if not text.strip():
             out[sid] = []
             continue
+        squashed = "".join(text.split())
         hits: List[str] = []
         for t in terms:
-            if t.lower() in text:
+            tl = t.lower()
+            if tl in text or "".join(tl.split()) in squashed:
                 hits.append(t)
+        # Account operators match on who posted / who is mentioned, not on words.
+        author = str((it.get("author") or {}).get("handle") or "").lstrip("@").lower()
+        for h in structured.from_accounts or []:
+            if author and author == h.lstrip("@").lower():
+                hits.append(f"from:{h.lstrip('@')}")
+        for h in (structured.mentions or []) + (structured.to_accounts or []):
+            if f"@{h.lstrip('@').lower()}" in text:
+                hits.append(f"@{h.lstrip('@')}")
         out[sid] = hits
     return out
 
@@ -96,7 +108,8 @@ def score_items(items: List[Dict[str, Any]], purpose: str, period: Optional[str]
     likes = [float((it.get("metrics") or {}).get("likes") or 0) for it in items]
     replies = [float((it.get("metrics") or {}).get("replies") or 0) for it in items]
     quotes = [float((it.get("metrics") or {}).get("quotes") or 0) for it in items]
-    z_likes = _zscores(likes)
+    # log scale: one viral post should not flatten everyone else to z≈0.
+    z_likes = _zscores([math.log1p(v) for v in likes])
     z_replies = _zscores(replies)
     z_quotes = _zscores(quotes)
     period_s = _period_seconds(period)

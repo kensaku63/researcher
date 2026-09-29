@@ -197,7 +197,11 @@
                 "type": ["string", "null"],
                 "enum": ["discovery", "collection", "single", "lookup", "diagnose", null]
               },
-              "fetched_at": { "type": "string", "format": "date-time" }
+              "fetched_at": { "type": "string", "format": "date-time" },
+              "tier": {
+                "type": ["string", "null"],
+                "description": "sort=top only: the min_faves tier query that surfaced this item (e.g. min_faves:200)."
+              }
             }
           },
           "limitations": {

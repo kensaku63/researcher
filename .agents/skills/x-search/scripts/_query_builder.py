@@ -39,6 +39,9 @@ class StructuredQuery:
     exclude_types: List[str] = field(default_factory=list)
     min_followers: Optional[int] = None
     max_followers: Optional[int] = None
+    min_likes: Optional[int] = None
+    min_replies: Optional[int] = None
+    min_reposts: Optional[int] = None
     language: Optional[str] = None
     period: Optional[str] = None
     sort: Optional[str] = None
@@ -126,7 +129,10 @@ def _ensure_standalone(parts: List[str]) -> None:
 
 def _build_base(q: StructuredQuery) -> List[str]:
     parts: List[str] = []
-    parts.extend(q.keywords)
+    # A keyword with a space ("AI agents") is sent as a phrase: unquoted, X
+    # matches the words anywhere and matched-term filtering then drops most
+    # of the fetch. Pass separate --keywords for word-level AND.
+    parts.extend(f'"{k}"' if " " in k.strip() and not k.strip().startswith('"') else k for k in q.keywords)
     parts.extend([f'"{p}"' for p in q.phrases])
     for group in q.any_of_groups:
         if not group:
@@ -197,13 +203,14 @@ def build(q: StructuredQuery) -> Dict[str, object]:
     if q.period:
         absolute = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})", q.period.strip())
         if absolute:
-            bird_parts.extend([
-                f"since:{absolute.group(1)}",
-                f"until:{absolute.group(2)}",
-            ])
             try:
                 start = datetime.strptime(absolute.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                end = datetime.strptime(absolute.group(2), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                # The end date is inclusive for the caller; X `until:` is exclusive.
+                end = datetime.strptime(absolute.group(2), "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
+                bird_parts.extend([
+                    f"since:{absolute.group(1)}",
+                    f"until:{end.strftime('%Y-%m-%d')}",
+                ])
                 # X API rejects end_time within 10s of request time; clamp to
                 # 30s ago if the date is today or in the future.
                 now_minus_30 = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=30)
@@ -222,10 +229,9 @@ def build(q: StructuredQuery) -> Dict[str, object]:
             range_ = _period_to_dates(q.period)
             if range_:
                 start, end = range_
-                bird_parts.extend([
-                    f"since:{start.strftime('%Y-%m-%d')}",
-                    f"until:{end.strftime('%Y-%m-%d')}",
-                ])
+                # since_time is second-precise; date-only since/until made 24h
+                # windows up to 48h wide and cut off today's posts.
+                bird_parts.append(f"since_time:{int(start.timestamp())}")
                 x_api_params["start_time"] = start.isoformat()
                 x_api_params["end_time"] = end.isoformat()
                 differences.append({
@@ -234,8 +240,22 @@ def build(q: StructuredQuery) -> Dict[str, object]:
                     "x_api": "start_time/end_time params",
                 })
 
+    # Engagement floors: web search operators only (X API v2 has no equivalent,
+    # so the caller post-filters API results).
+    floors = [("min_faves", q.min_likes), ("min_replies", q.min_replies), ("min_retweets", q.min_reposts)]
+    floor_parts = [f"{op}:{int(v)}" for op, v in floors if v]
+    if floor_parts:
+        bird_parts.extend(floor_parts)
+        differences.append({
+            "field": "min_likes/min_replies/min_reposts",
+            "bird": " ".join(floor_parts),
+            "x_api": "post-fetch filter",
+        })
+
     if q.sort:
         s = q.sort.strip().lower()
+        if s == "top":
+            s = "relevancy"
         if s in {"recency", "relevancy"}:
             x_api_params["sort_order"] = s
             differences.append({
