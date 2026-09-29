@@ -30,8 +30,8 @@ config:
   - name: PAPER_SEARCH_MCP_SEMANTIC_SCHOLAR_API_KEY
     purpose: Semantic Scholar API key (optional — relaxes rate limits)
   - name: YOUTUBE_API_KEY
-    purpose: YouTube Data API access for search, video metrics, channel metrics, and
-      comments
+    purpose: Optional YouTube Data API access for search, video metrics, channel metrics,
+      and comments. youtube-search falls back to keyless web endpoints without it.
   - name: OPENAI_API_KEY
     purpose: OpenAI speech-to-text fallback for YouTube videos without captions
   - name: AUTH_TOKEN

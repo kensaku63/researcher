@@ -2,74 +2,212 @@
   "platform": "youtube",
   "purpose": "trend_discovery",
   "subcommand": "search",
-  "tool": "youtube_data_api",
+  "tool": "youtube_web",
   "query": "生成AI 勉強法",
+  "queries": [
+    "生成AI 勉強法"
+  ],
   "language": "ja",
   "region": "JP",
   "period": "30d",
-  "fetched_at": "2026-06-06T00:00:00Z",
-  "quota_estimate": 102,
+  "fetched_at": "2026-09-29T03:49:03Z",
+  "quota_estimate": 0,
   "auto_routing": {
-    "applied": true,
-    "from_purpose": "trend_discovery",
+    "applied": false,
+    "from_purpose": null,
     "chosen_subcommand": "search",
     "chosen_defaults": {
-      "order": "date",
-      "max_per_channel": 2,
-      "comments_top_n": 3
+      "backend": "web",
+      "sort": "velocity"
     }
+  },
+  "summary": {
+    "candidates": 40,
+    "selected": 2,
+    "content_types": {
+      "video": 2
+    },
+    "views": {
+      "total": 489651,
+      "median": 244825,
+      "max": 332788,
+      "min": 156863
+    },
+    "published_range": {
+      "oldest": "2026-09-05",
+      "newest": "2026-09-24"
+    },
+    "top_channels": [
+      {
+        "channel": "サラタメさん",
+        "videos": 1
+      },
+      {
+        "channel": "挫折者専門の英会話コーチ | まるちゃん",
+        "videos": 1
+      }
+    ]
   },
   "items": [
     {
-      "url": "https://www.youtube.com/watch?v=exampleid01",
-      "source_id": "exampleid01",
-      "author": "Example Channel",
-      "author_url": "https://www.youtube.com/channel/UCexample",
-      "published_at": "2026-05-20T00:00:00Z",
-      "title": "生成AIの勉強法を30日で見直す",
-      "text": "説明文要約。関連語、対象者、動画構成を300文字以内で保持する。",
+      "url": "https://www.youtube.com/watch?v=o8mMELmh4Ak",
+      "source_id": "o8mMELmh4Ak",
+      "content_type": "video",
+      "author": "サラタメさん",
+      "author_url": "https://www.youtube.com/@salatame",
+      "channel_id": "UCaG7jufgiw4p5mphPPVbqhw",
+      "channel_handle": "salatame",
+      "published_at": "2026-09-24T03:09:44Z",
+      "published_at_precision": "exact",
+      "published_text": "5 日前",
+      "title": "【AIの正しい使い方】“今日から”も”10年後”も使えるヤツです。",
+      "text": "▼裏タメLINE https://lstep.app/RvtOPzX 「LINE限定動画」は上記公式LINEから！ﾁﾅﾐﾆ無料ﾃﾞｽ!! (登録＆アンケート回答完了したら、パスワードを入力) ＜詳細な手順＞ ①↑リンク↑をタップ。 「アプリで開く」を押してLINEで開く。 ②裏タメLINE表示されたら「追加」ボタン押す。 ③１分アンケートに回答する。 ④裏タメLINEトーク画面で、 下記のパスワードをメッセージする。 ⑤すぐに『LINE限定動画』をお送りします！ ▼LINE限定動画：パスワード ・「なぜLINE動画始めた？」 → 「なぜなぜ」 ・「サラタメの動画、AI使ってる？」 → 「どん…",
+      "duration": "55:37",
+      "duration_seconds": 3337,
       "metrics": {
-        "views": 120000,
-        "likes": 3200,
-        "comments": 180,
-        "subscribers": 45000,
-        "video_count": 312
+        "views": 156863,
+        "likes": 1546,
+        "comments": 93,
+        "subscribers": 826000,
+        "video_count": null,
+        "age_days": 5.0,
+        "views_per_day": 31201.9,
+        "like_rate": 0.0099,
+        "comment_rate": 0.00059,
+        "views_per_subscriber": 0.19
       },
-      "matched_terms": ["生成AI", "勉強法"],
-      "quality_score": 0.72,
-      "selection_filters": ["min_views_ok", "language_match", "in_period", "channel_diversity_ok"],
-      "why_selected": "order=date で直近公開。再生12万、コメント180、同一チャンネル制限を通過。",
-      "limitations": []
+      "matched_terms": [],
+      "found_by_queries": [
+        "生成AI 勉強法"
+      ],
+      "search_rank": 4,
+      "quality_score": 0.6284,
+      "selection_filters": [
+        "in_period",
+        "min_views_ok",
+        "title_script_match",
+        "channel_diversity_ok"
+      ],
+      "why_selected": "sort=velocity search_rank=4 views=156863 views_per_day=31201.9 like_rate=0.0099 views_per_subscriber=0.19 subscribers=826000 quality_score=0.6284 filters=in_period,min_views_ok,title_script_match,channel_diversity_ok",
+      "limitations": [],
+      "channel_verified": false,
+      "rank": 1,
+      "has_transcript": true,
+      "enriched_by": [
+        "web_next",
+        "web_player"
+      ],
+      "category": "Howto & Style",
+      "tags": [
+        "書評",
+        "要約",
+        "本要約",
+        "解説",
+        "書籍",
+        "わかりやすく",
+        "まとめ"
+      ]
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=uPjrnFv_bEc",
+      "source_id": "uPjrnFv_bEc",
+      "content_type": "video",
+      "author": "挫折者専門の英会話コーチ | まるちゃん",
+      "author_url": "https://www.youtube.com/@maruchan_english",
+      "channel_id": "UCx_5vD56IWIRm3kqGnLdm7w",
+      "channel_handle": "maruchan_english",
+      "published_at": "2026-09-05T11:00:05Z",
+      "published_at_precision": "exact",
+      "published_text": "3 週間前",
+      "title": "【脳死OK】Geminiを30日使ったら英会話がスラスラ出るようになった！中学英語だけのAI独学術【ChatGPT超え】",
+      "text": "コレ知らないと損💦Geminiの英語学習ヤバすぎ…笑 ━━━━━━━━━━━━━━━━━━━━━━━ 🎁英会話が上達する豪華特典を無料プレゼント🎁 ⇩今すぐ受け取れる公式LINEはこちら⇩ https://bit.ly/4qWZUu9 ━━━━━━━━━━━━━━━━━━━━━━━ 英語挫折者を短期間で「話せる」に変える そんな実践的な学習法や毎日の勉強に役立つ教材等を発信中！ #英語 #英会話 #Gemini",
+      "duration": "11:22",
+      "duration_seconds": 682,
+      "metrics": {
+        "views": 332788,
+        "likes": 5176,
+        "comments": 112,
+        "subscribers": 7550,
+        "video_count": null,
+        "age_days": 23.7,
+        "views_per_day": 14041.3,
+        "like_rate": 0.0156,
+        "comment_rate": 0.00034,
+        "views_per_subscriber": 44.078
+      },
+      "matched_terms": [],
+      "found_by_queries": [
+        "生成AI 勉強法"
+      ],
+      "search_rank": 7,
+      "quality_score": 0.7635,
+      "selection_filters": [
+        "in_period",
+        "min_views_ok",
+        "title_script_match",
+        "channel_diversity_ok"
+      ],
+      "why_selected": "sort=velocity search_rank=7 views=332788 views_per_day=14041.3 like_rate=0.0156 views_per_subscriber=44.078 subscribers=7550 quality_score=0.7635 filters=in_period,min_views_ok,title_script_match,channel_diversity_ok",
+      "limitations": [],
+      "channel_verified": false,
+      "rank": 2,
+      "has_transcript": true,
+      "hashtags": [
+        "#英会話",
+        "#Gemini",
+        "#英語"
+      ],
+      "enriched_by": [
+        "web_next",
+        "web_player"
+      ],
+      "category": "People & Blogs",
+      "tags": [
+        "英語",
+        "英会話",
+        "英語学習",
+        "リスニング",
+        "スピーキング",
+        "英語フレーズ",
+        "日常英会話",
+        "AI 英語",
+        "Gemini 英語",
+        "chatgpt 英語"
+      ]
     }
   ],
   "comments": [],
   "trends": [],
   "queries_tried": [
     {
-      "endpoint": "search.list",
+      "endpoint": "web_search",
       "query": "生成AI 勉強法",
-      "quota_cost": 100,
-      "result_count_before_filter": 42,
-      "result_count_after_filter": 18
+      "quota_cost": 0,
+      "result_count_before_filter": 40,
+      "result_count_after_filter": 40,
+      "memo": "pages=2 filters=upload_date<=31d,type=video"
     },
     {
-      "endpoint": "videos.list",
-      "query": "42 video ids",
-      "quota_cost": 1,
-      "result_count_before_filter": 42,
-      "result_count_after_filter": 42
-    },
-    {
-      "endpoint": "channels.list",
-      "query": "18 channel ids",
-      "quota_cost": 1,
-      "result_count_before_filter": 18,
-      "result_count_after_filter": 18
+      "endpoint": "web_video_detail",
+      "query": "30 videos (next+player)",
+      "quota_cost": 0,
+      "result_count_before_filter": 30,
+      "result_count_after_filter": 30
     }
   ],
   "excluded_summary": [
-    { "reason": "same_channel_limit", "count": 8 },
-    { "reason": "below_min_views", "count": 12 }
+    {
+      "reason": "live_excluded",
+      "count": 1
+    },
+    {
+      "reason": "below_min_views",
+      "count": 21
+    },
+    {
+      "reason": "over_limit",
+      "count": 16
+    }
   ],
   "limitations": [],
   "next_human_actions": []

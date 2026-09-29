@@ -44,8 +44,11 @@ Ask the user only when a missing input changes the search materially. Use safe d
 
 - One turn, one search strategy.
 - Do not expand from YouTube to other media unless the user asks.
-- Prefer YouTube Data API for repeatable public facts.
-- Prefer `channel` or `monitor` when the user gives known channels, because they avoid expensive `search.list` calls.
+- The web backend needs no API key or quota; the Data API is used automatically when `YOUTUBE_API_KEY` is set.
+- Use 2-4 `--query` variants in one `search` run (synonyms, the audience's wording) because web results vary between runs.
+- Choose `--sort` from the research question: `velocity` (what is growing now), `outlier` (videos beating their channel size), `views` (established hits), `recent`, `engagement`.
+- Use `search --type channel` for influencer discovery before `channel`.
+- Prefer `channel` or `monitor` when the user gives known channels.
 - Use `comments` only for important videos, not every result.
 - Use `trends` for related terms and seasonality, not for video metrics.
 - Use `youtube-transcript` only after narrowing to important videos.
@@ -61,7 +64,9 @@ Ask the user only when a missing input changes the search materially. Use safe d
 - Period:
 - Target:
 - Primary subcommand: (`search` / `channel` / `lookup` / `monitor` / `comments` / `trends`)
-- Query / channels:
+- Query / channels: (multiple queries allowed)
+- Sort: (`quality` / `velocity` / `outlier` / `views` / `recent` / `engagement`)
+- Shorts: (`exclude` / `include` / `only`)
 - Include terms:
 - Exclude terms:
 - Limit:

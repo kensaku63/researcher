@@ -22,143 +22,547 @@
     "next_human_actions"
   ],
   "properties": {
-    "platform": { "const": "youtube" },
-    "purpose": { "type": "string" },
-    "subcommand": { "type": "string" },
-    "tool": { "type": "string" },
-    "query": { "type": ["string", "null"] },
-    "language": { "type": "string" },
-    "region": { "type": "string" },
-    "period": { "type": "string" },
-    "fetched_at": { "type": "string" },
-    "quota_estimate": { "type": "integer", "minimum": 0 },
+    "platform": {
+      "const": "youtube"
+    },
+    "purpose": {
+      "type": "string"
+    },
+    "subcommand": {
+      "type": "string"
+    },
+    "tool": {
+      "type": "string"
+    },
+    "query": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "language": {
+      "type": "string"
+    },
+    "region": {
+      "type": "string"
+    },
+    "period": {
+      "type": "string"
+    },
+    "fetched_at": {
+      "type": "string"
+    },
+    "quota_estimate": {
+      "type": "integer",
+      "minimum": 0
+    },
     "auto_routing": {
       "type": "object",
       "properties": {
-        "applied": { "type": "boolean" },
-        "from_purpose": { "type": ["string", "null"] },
-        "chosen_subcommand": { "type": ["string", "null"] },
-        "chosen_defaults": { "type": "object" }
+        "applied": {
+          "type": "boolean"
+        },
+        "from_purpose": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "chosen_subcommand": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "chosen_defaults": {
+          "type": "object"
+        }
       },
       "additionalProperties": true
     },
     "items": {
       "type": "array",
-      "items": { "$ref": "#/$defs/item" }
+      "items": {
+        "$ref": "#/$defs/item"
+      }
     },
     "comments": {
       "type": "array",
-      "items": { "$ref": "#/$defs/comment" }
+      "items": {
+        "$ref": "#/$defs/comment"
+      }
     },
     "trends": {
       "type": "array",
-      "items": { "$ref": "#/$defs/trend" }
+      "items": {
+        "$ref": "#/$defs/trend"
+      }
     },
     "queries_tried": {
       "type": "array",
-      "items": { "$ref": "#/$defs/queryLog" }
+      "items": {
+        "$ref": "#/$defs/queryLog"
+      }
     },
     "excluded_summary": {
       "type": "array",
-      "items": { "$ref": "#/$defs/countReason" }
+      "items": {
+        "$ref": "#/$defs/countReason"
+      }
     },
     "limitations": {
       "type": "array",
-      "items": { "$ref": "#/$defs/message" }
+      "items": {
+        "$ref": "#/$defs/message"
+      }
     },
     "next_human_actions": {
       "type": "array",
-      "items": { "$ref": "#/$defs/message" }
+      "items": {
+        "$ref": "#/$defs/message"
+      }
+    },
+    "queries": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "summary": {
+      "type": "object",
+      "description": "Descriptive counts over the selected items (candidates, selected, content_types, views, published_range, top_channels, approx_dates).",
+      "additionalProperties": true
     }
   },
   "$defs": {
     "item": {
       "type": "object",
-      "required": ["url", "source_id", "author", "title", "metrics", "why_selected", "limitations"],
+      "required": [
+        "url",
+        "source_id",
+        "author",
+        "title",
+        "metrics",
+        "why_selected",
+        "limitations"
+      ],
       "properties": {
-        "url": { "type": ["string", "null"] },
-        "source_id": { "type": ["string", "null"] },
-        "author": { "type": ["string", "null"] },
-        "author_url": { "type": ["string", "null"] },
-        "published_at": { "type": ["string", "null"] },
-        "title": { "type": ["string", "null"] },
-        "text": { "type": ["string", "null"] },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "author_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "published_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "metrics": {
           "type": "object",
           "properties": {
-            "views": { "type": ["integer", "null"] },
-            "likes": { "type": ["integer", "null"] },
-            "comments": { "type": ["integer", "null"] },
-            "subscribers": { "type": ["integer", "null"] },
-            "video_count": { "type": ["integer", "null"] }
+            "views": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "likes": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "comments": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "subscribers": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "video_count": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "age_days": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "views_per_day": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "like_rate": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "comment_rate": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "views_per_subscriber": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
           },
           "additionalProperties": true
         },
-        "matched_terms": { "type": "array", "items": { "type": "string" } },
-        "quality_score": { "type": ["number", "null"] },
-        "selection_filters": { "type": "array", "items": { "type": "string" } },
-        "why_selected": { "type": "string" },
-        "limitations": { "type": "array", "items": { "$ref": "#/$defs/message" } }
+        "matched_terms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "quality_score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "selection_filters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "why_selected": {
+          "type": "string"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/message"
+          }
+        },
+        "content_type": {
+          "enum": [
+            "video",
+            "short",
+            "live",
+            "channel"
+          ]
+        },
+        "channel_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channel_handle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "published_at_precision": {
+          "enum": [
+            "exact",
+            "day",
+            "approx",
+            null
+          ]
+        },
+        "published_text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Relative time shown by YouTube, e.g. '3 週間前'."
+        },
+        "title_localized": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "YouTube's auto-translated title when it differs from the original title."
+        },
+        "duration_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rank": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "search_rank": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "found_by_queries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "has_transcript": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "has_captions": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "default_audio_language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enriched_by": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       },
       "additionalProperties": true
     },
     "comment": {
       "type": "object",
-      "required": ["video_id", "comment_id", "text", "order", "why_selected"],
+      "required": [
+        "video_id",
+        "comment_id",
+        "text",
+        "order",
+        "why_selected"
+      ],
       "properties": {
-        "video_id": { "type": "string" },
-        "comment_id": { "type": "string" },
-        "text": { "type": "string" },
-        "author_display_name": { "type": ["string", "null"] },
-        "like_count": { "type": ["integer", "null"] },
-        "reply_count": { "type": ["integer", "null"] },
-        "published_at": { "type": ["string", "null"] },
-        "order": { "type": "string" },
-        "why_selected": { "type": "string" }
+        "video_id": {
+          "type": "string"
+        },
+        "comment_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "author_display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "like_count": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reply_count": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "published_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "order": {
+          "type": "string"
+        },
+        "why_selected": {
+          "type": "string"
+        },
+        "is_pinned": {
+          "type": "boolean"
+        },
+        "author_is_uploader": {
+          "type": "boolean"
+        },
+        "published_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       },
       "additionalProperties": true
     },
     "trend": {
       "type": "object",
-      "required": ["keyword", "score", "rising", "related_queries", "region", "period"],
+      "required": [
+        "keyword",
+        "score",
+        "rising",
+        "related_queries",
+        "region",
+        "period"
+      ],
       "properties": {
-        "keyword": { "type": "string" },
-        "score": { "type": ["number", "null"] },
-        "rising": { "type": "boolean" },
-        "related_queries": { "type": "array", "items": { "type": "string" } },
-        "region": { "type": "string" },
-        "period": { "type": "string" }
+        "keyword": {
+          "type": "string"
+        },
+        "score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "rising": {
+          "type": "boolean"
+        },
+        "related_queries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "region": {
+          "type": "string"
+        },
+        "period": {
+          "type": "string"
+        },
+        "seed_query": {
+          "type": "string"
+        }
       },
       "additionalProperties": true
     },
     "queryLog": {
       "type": "object",
-      "required": ["endpoint", "quota_cost"],
+      "required": [
+        "endpoint",
+        "quota_cost"
+      ],
       "properties": {
-        "endpoint": { "type": "string" },
-        "query": { "type": ["string", "null"] },
-        "quota_cost": { "type": "integer", "minimum": 0 },
-        "result_count_before_filter": { "type": ["integer", "null"] },
-        "result_count_after_filter": { "type": ["integer", "null"] },
-        "memo": { "type": ["string", "null"] }
+        "endpoint": {
+          "type": "string"
+        },
+        "query": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quota_cost": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "result_count_before_filter": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "result_count_after_filter": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "memo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       },
       "additionalProperties": true
     },
     "countReason": {
       "type": "object",
-      "required": ["reason", "count"],
+      "required": [
+        "reason",
+        "count"
+      ],
       "properties": {
-        "reason": { "type": "string" },
-        "count": { "type": "integer", "minimum": 0 }
+        "reason": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        }
       },
       "additionalProperties": true
     },
     "message": {
       "type": "object",
-      "required": ["code", "message"],
+      "required": [
+        "code",
+        "message"
+      ],
       "properties": {
-        "code": { "type": "string" },
-        "message": { "type": "string" }
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
       },
       "additionalProperties": true
     }

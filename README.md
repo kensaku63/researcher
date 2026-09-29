@@ -21,7 +21,7 @@ Skill内の相対パスのコマンドはagent repoをカレントディレク�
 ```bash
 cd "$AA_AGENT_DIR"
 paper-search search "diffusion models" -s arxiv,semantic -n 5
-python3 .agents/skills/youtube-search/scripts/search.py search --query "生成AI" --limit 5
+python3 .agents/skills/youtube-search/scripts/search.py search --query "生成AI" --limit 5 --format markdown
 python3 .agents/skills/x-search/scripts/search.py search --keywords "生成AI" --limit 5 --tool bird
 ```
 
@@ -34,3 +34,7 @@ python3 .agents/skills/x-search/scripts/search.py search --keywords "生成AI" -
 2026-09-29に `x-search` をbird実検索で検証・改善した。bird はChromeのx.comログインCookieを自動で使えるため、`AUTH_TOKEN` / `CT0` 未設定でも動く。既定の `--sort top` は `min_faves` 段階検索で期間全体の注目投稿を集める（詳細は `x-search/SKILL.md`）。X API経路（`X_BEARER_TOKEN`）と `graph` は未検証。
 
 Skill簡易validatorは9件合格。原本の `paper-search` のdescription内の山括弧、`x-search` の `disable-model-invocation` はvalidatorで不合格となるが、丸ごとコピーする指定に従って変更していない。`x-search` は必要時にSkillを明示して使用する。
+
+## YouTube検索の改良（2026-09-29）
+
+`youtube-search` はAPIキーなしで動く web バックエンド（YouTubeのInnerTube search/next/player、RSS）を持つ。`YOUTUBE_API_KEY` があれば Data API を使い、クォータ切れ時は web へフォールバックする。複数クエリの統合、ローカル並べ替え（views/day・登録者比など）、Shorts・チャンネル検索、Markdown表出力、自動翻訳タイトルの原題復元を追加した。実検索で確認した制約は SKILL.md の「Facts to Keep in Mind」にある。
