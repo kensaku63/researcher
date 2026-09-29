@@ -38,3 +38,5 @@ Skill簡易validatorは9件合格。原本の `paper-search` のdescription内�
 ## YouTube検索の改良（2026-09-29）
 
 `youtube-search` はAPIキーなしで動く web バックエンド（YouTubeのInnerTube search/next/player、RSS）を持つ。`YOUTUBE_API_KEY` があれば Data API を使い、クォータ切れ時は web へフォールバックする。複数クエリの統合、ローカル並べ替え（views/day・登録者比など）、Shorts・チャンネル検索、Markdown表出力、自動翻訳タイトルの原題復元を追加した。実検索で確認した制約は SKILL.md の「Facts to Keep in Mind」にある。
+
+2026-09-29（2回目）: リサーチ作業での使い勝手を改善した。`search --comments N`（上位動画のコメントを同時取得）と `--details`、チャンネル検索の活動状況（最終投稿日・30日投稿数・直近の再生数中央値）、`channel` への動画URL入力とチャンネル中央値比 `--sort vs_median`、保存JSONの統合・並べ替え `render`、CSV出力、`--output` 指定時のMarkdown既定表示を追加した。

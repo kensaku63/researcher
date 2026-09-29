@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
+import io
 import datetime as dt
 import json
 import math
@@ -56,7 +58,9 @@ SP_TYPE = {"video": 1, "channel": 2, "playlist": 3, "shorts": 9}
 SP_DURATION = {"short": 1, "long": 2, "medium": 3}
 SP_UPLOAD_WINDOWS = [(1 / 24, 1), (1, 2), (7, 3), (31, 4), (366, 5)]  # (max days, value)
 
-SORT_CHOICES = ["auto", "youtube", "quality", "views", "velocity", "recent", "engagement", "outlier"]
+SORT_CHOICES = ["auto", "youtube", "quality", "views", "velocity", "recent", "engagement", "outlier", "vs_median"]
+BASELINE_MIN_SAMPLES = 3
+VIDEO_URL_PATTERN = r"youtu\.be/|youtube\.com/(watch|shorts/|live/|embed/)"
 
 
 class SearchError(RuntimeError):
@@ -441,7 +445,12 @@ def item_from_api_video(video: dict[str, Any], channel_metrics: dict[str, dict[s
     if content_type == "short":
         item["limitations"].append(message("shorts_heuristic", f"Classified as Short because duration <= {SHORTS_MAX_SECONDS}s."))
     if channel_metrics and channel_id in channel_metrics:
-        item["metrics"].update(channel_metrics[channel_id])
+        channel_info = dict(channel_metrics[channel_id])
+        handle = channel_info.pop("_handle", None)
+        item["metrics"].update(channel_info)
+        if handle:
+            item["channel_handle"] = handle
+            item["author_url"] = f"https://www.youtube.com/@{urllib.parse.quote(handle)}"
     return item
 
 
@@ -452,6 +461,7 @@ def channel_metrics_from_response(channels: list[dict[str, Any]]) -> dict[str, d
         result[channel.get("id")] = {
             "subscribers": safe_int(stats.get("subscriberCount")),
             "video_count": safe_int(stats.get("videoCount")),
+            "_handle": ((channel.get("snippet") or {}).get("customUrl") or "").lstrip("@") or None,
         }
     return result
 
@@ -1250,6 +1260,7 @@ SORT_KEYS = {
     "recent": lambda item: item.get("published_at") or "",
     "engagement": lambda item: item["metrics"].get("like_rate") or 0,
     "outlier": lambda item: item["metrics"].get("views_per_subscriber") or 0,
+    "vs_median": lambda item: item["metrics"].get("views_vs_channel_median") or 0,
 }
 
 
@@ -1556,18 +1567,28 @@ def run_search(args: argparse.Namespace) -> dict[str, Any]:
     result["summary"] = build_summary(result, discovered)
     if not filtered:
         result["limitations"].append(message("result_empty", "No items remained after filtering."))
+    elif args.type == "channel" and not args.no_activity:
+        add_channel_activity(filtered, result)
+    if args.comments and args.type != "channel":
+        top = [item for item in filtered if item.get("content_type") != "channel"][: args.comments]
+        comment_args = argparse.Namespace(**{**vars(args), "limit": args.comments_per_video})
+        collect_comments([item["source_id"] for item in top], backend, comment_args, result, {item["source_id"]: item.get("title") for item in top})
+        result["summary"]["comments"] = len(result["comments"])
     return result
 
 
 def run_channel(args: argparse.Namespace) -> dict[str, Any]:
     backend = resolve_backend(args)
     result = empty_result(args, "channel", "youtube_data_api" if backend == "api" else "youtube_web")
+    result["inputs"] = list(args.channels)
+    args.channels = channels_from_video_urls(args.channels, backend, args, result)
     if backend == "api":
         items = api_channel_items(args, result)
     else:
         items = web_channel_items(args, result)
     if items is None:
         return result
+    baselines = apply_channel_baseline(items)
     filtered, excluded = filter_items(items, args, apply_channel_limit=False)
     strip_private(filtered)
     for item in filtered:
@@ -1575,10 +1596,68 @@ def run_channel(args: argparse.Namespace) -> dict[str, Any]:
     result["items"] = filtered
     result["excluded_summary"] = compact_counts(excluded)
     result["summary"] = build_summary(result, len(items))
+    if baselines:
+        result["summary"]["channel_baselines"] = baselines
+        result["limitations"].append(message("baseline_age_bias", "views_vs_channel_median compares against the median of the fetched uploads; very recent videos have had less time to collect views."))
     result["auto_routing"]["chosen_defaults"] = {"backend": backend, "sort": effective_sort(args)}
     if not filtered:
         result["limitations"].append(message("result_empty", "No channel videos remained after filtering."))
     return result
+
+
+def channels_from_video_urls(values: list[str], backend: str, args: argparse.Namespace, result: dict[str, Any]) -> list[str]:
+    """Let `channel --channels <video URL>` research the channel that uploaded that video."""
+    resolved: list[str] = []
+    for raw in values:
+        video_id = parse_video_id(raw) if re.search(VIDEO_URL_PATTERN, raw) else None
+        if not video_id:
+            resolved.append(raw)
+            continue
+        channel_id = None
+        try:
+            if backend == "api":
+                videos, logs = fetch_videos([video_id])
+                add_logs(result, logs)
+                channel_id = (videos[0].get("snippet") or {}).get("channelId") if videos else None
+            else:
+                channel_id = (innertube_player(video_id, args).get("videoDetails") or {}).get("channelId")
+                result["queries_tried"].append(query_log("web_player", video_id, 0, 1, 1 if channel_id else 0, memo="video URL -> channel"))
+        except SearchError as exc:
+            result["limitations"].append(message(exc.code, f"Could not resolve the channel of {raw}: {exc.message}"))
+        if channel_id:
+            resolved.append(channel_id)
+        else:
+            result["limitations"].append(message("channel_id_unknown", f"Could not resolve the channel of video {raw}."))
+    return resolved
+
+
+def apply_channel_baseline(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Median views of the fetched uploads per channel and content type (videos and Shorts differ a lot),
+    and each video's views relative to it. Uses all fetched uploads, before the period filter."""
+    groups: defaultdict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for item in items:
+        if item["metrics"].get("views") is not None and item.get("content_type") in {"video", "short"}:
+            groups[(item.get("channel_id") or item.get("author") or "", item["content_type"])].append(item)
+    baselines = []
+    for (channel, content_type), group in groups.items():
+        if len(group) < BASELINE_MIN_SAMPLES:
+            continue
+        median = statistics.median(item["metrics"]["views"] for item in group)
+        for item in group:
+            item["metrics"]["channel_median_views"] = int(median)
+            if median:
+                item["metrics"]["views_vs_channel_median"] = round(item["metrics"]["views"] / median, 2)
+        baselines.append(
+            {
+                "channel": group[0].get("author"),
+                "channel_id": group[0].get("channel_id"),
+                "content_type": content_type,
+                "uploads_sampled": len(group),
+                "median_views": int(median),
+                "subscribers": group[0]["metrics"].get("subscribers"),
+            }
+        )
+    return baselines
 
 
 def api_channel_items(args: argparse.Namespace, result: dict[str, Any]) -> list[dict[str, Any]] | None:
@@ -1649,6 +1728,7 @@ def web_channel_items(args: argparse.Namespace, result: dict[str, Any]) -> list[
     return items
 
 
+RSS_FEED_SIZE = 15
 RSS_NS = {"atom": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015", "media": "http://search.yahoo.com/mrss/"}
 
 
@@ -1664,7 +1744,7 @@ def resolve_channel_id(value: str, result: dict[str, Any]) -> str | None:
     return channel_id
 
 
-def rss_items(channel_id: str, result: dict[str, Any]) -> list[dict[str, Any]]:
+def rss_items(channel_id: str, result: dict[str, Any], log: bool = True) -> list[dict[str, Any]]:
     """Latest 15 uploads with exact dates, views and likes. No key, no quota."""
     response = None
     for _attempt in range(3):  # YouTube RSS intermittently returns 5xx
@@ -1700,12 +1780,44 @@ def rss_items(channel_id: str, result: dict[str, Any]) -> list[dict[str, Any]]:
         item["metrics"]["views"] = safe_int(views.get("views")) if views is not None else None
         item["metrics"]["likes"] = safe_int(rating.get("count")) if rating is not None else None
         items.append(item)
-    result["queries_tried"].append(query_log("rss", channel_id, 0, len(items), len(items)))
+    if log:
+        result["queries_tried"].append(query_log("rss", channel_id, 0, len(items), len(items)))
     return items
+
+
+def add_channel_activity(items: list[dict[str, Any]], result: dict[str, Any]) -> None:
+    """Is the channel still active, and how do its recent uploads perform? From RSS (latest 15 uploads)."""
+    channels = [item for item in items if item.get("content_type") == "channel" and item.get("channel_id")]
+    if not channels:
+        return
+    with ThreadPoolExecutor(max_workers=ENRICH_WORKERS) as pool:
+        feeds = list(pool.map(lambda item: rss_items(item["channel_id"], result, log=False), channels))
+    now = dt.datetime.now(dt.timezone.utc)
+    done = 0
+    for item, uploads in zip(channels, feeds):
+        dates = [parse_iso_datetime(upload.get("published_at")) for upload in uploads]
+        dates = sorted((d for d in dates if d), reverse=True)
+        if not dates:
+            continue
+        done += 1
+        views = [upload["metrics"]["views"] for upload in uploads if upload.get("content_type") == "video" and upload["metrics"].get("views") is not None]
+        shorts_views = [upload["metrics"]["views"] for upload in uploads if upload.get("content_type") == "short" and upload["metrics"].get("views") is not None]
+        item["activity"] = {
+            "sampled_uploads": len(uploads),
+            "last_upload_at": iso(dates[0]),
+            "days_since_last_upload": round((now - dates[0]).total_seconds() / 86400, 1),
+            "uploads_last_30d": sum(1 for d in dates if (now - d).days < 30),
+            "recent_videos": len(views),
+            "recent_video_median_views": int(statistics.median(views)) if views else None,
+            "recent_shorts": len(shorts_views),
+            "recent_shorts_median_views": int(statistics.median(shorts_views)) if shorts_views else None,
+        }
+    result["queries_tried"].append(query_log("rss", f"{len(channels)} channels (activity)", 0, len(channels), done, memo="latest 15 uploads per channel"))
 
 
 def run_monitor(args: argparse.Namespace) -> dict[str, Any]:
     result = empty_result(args, "monitor", "rss")
+    result["inputs"] = list(args.channels)
     for value in args.channels:
         channel_id = resolve_channel_id(value, result)
         if not channel_id:
@@ -1739,28 +1851,36 @@ def resolve_handle_web(parsed: dict[str, str | None]) -> str | None:
 
 def run_comments(args: argparse.Namespace) -> dict[str, Any]:
     backend = resolve_backend(args)
-    result = empty_result(args, "comments", "youtube_data_api" if backend == "api" else "ytdlp")
+    result = empty_result(args, "comments", "youtube_data_api" if backend == "api" else "youtube_web")
     video_ids = []
     for value in args.video_ids:
         video_id = parse_video_id(value)
         if video_id and video_id not in video_ids:
             video_ids.append(video_id)
+    result["inputs"] = video_ids
     if not video_ids:
         result["limitations"].append(message("url_invalid", "No valid video IDs were provided."))
         return result
 
-    for video_id in video_ids[: args.comment_top_n]:
+    collect_comments(video_ids[: args.comment_top_n], backend, args, result, {})
+    if not result["comments"]:
+        result["limitations"].append(message("result_empty", "No comments were returned. Comments may be disabled or unavailable."))
+    result["summary"] = {"videos": len(video_ids[: args.comment_top_n]), "comments": len(result["comments"])}
+    return result
+
+
+def collect_comments(video_ids: list[str], backend: str, args: argparse.Namespace, result: dict[str, Any], titles: dict[str, str]) -> None:
+    for video_id in video_ids:
         try:
             comments = api_comments(video_id, args, result) if backend == "api" else web_comments(video_id, args, result)
         except SearchError as exc:
             code = "comments_disabled" if exc.code in {"forbidden", "api_error"} else exc.code
             result["limitations"].append(message(code, f"Could not fetch comments for {video_id}: {exc.message}"))
             continue
+        for comment in comments:
+            if titles.get(video_id):
+                comment["video_title"] = titles[video_id]
         result["comments"].extend(comments)
-    if not result["comments"]:
-        result["limitations"].append(message("result_empty", "No comments were returned. Comments may be disabled or unavailable."))
-    result["summary"] = {"videos": len(video_ids[: args.comment_top_n]), "comments": len(result["comments"])}
-    return result
 
 
 def api_comments(video_id: str, args: argparse.Namespace, result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1834,6 +1954,8 @@ def web_comments(video_id: str, args: argparse.Namespace, result: dict[str, Any]
         if panel.get("panelIdentifier") == "engagement-panel-comments-section":
             header = (panel.get("header") or {}).get("engagementPanelTitleHeaderRenderer") or {}
             total = parse_count_text(_text(header.get("contextualInfo")))
+    primary = next((value for _key, value in _walk(data, {"videoPrimaryInfoRenderer"})), None) or {}
+    video_title = _text(primary.get("title")) or None
     token = _comments_start_token(data, newest)
     if not token:
         raise SearchError("comments_disabled", "No comment section found (comments may be disabled).")
@@ -1857,6 +1979,7 @@ def web_comments(video_id: str, args: argparse.Namespace, result: dict[str, Any]
                     payload = payloads.get(view.get("commentId"))
                     if payload:
                         comment = comment_from_payload(video_id, payload, thread, args)
+                        comment["video_title"] = video_title
                         if comment["author_is_uploader"] and not args.include_creator_comments:
                             skipped_creator += 1
                         else:
@@ -1987,10 +2110,10 @@ def md_cell(value: Any) -> str:
     return str(value if value not in (None, "") else "-").replace("|", "｜").replace("\n", " ")
 
 
-def render_markdown(result: dict[str, Any]) -> str:
+def render_markdown(result: dict[str, Any], details: bool = False) -> str:
     summary = result.get("summary") or {}
     lines = [
-        f"# YouTube {result.get('subcommand')}: {result.get('query') or ''}".rstrip(),
+        f"# YouTube {result.get('subcommand')}: {result.get('query') or ', '.join(result.get('inputs') or [])}".rstrip(),
         "",
         f"- Purpose: {result.get('purpose')} / Tool: {result.get('tool')} / Quota: {result.get('quota_estimate')}",
         f"- Language/Region/Period: {result.get('language')} / {result.get('region')} / {result.get('period')}",
@@ -2007,17 +2130,37 @@ def render_markdown(result: dict[str, Any]) -> str:
     if repeated:
         lines.append(f"- Repeated channels: {', '.join(repeated)}")
     items = result.get("items") or []
+    for baseline in summary.get("channel_baselines") or []:
+        lines.append(
+            f"- Baseline {baseline['channel']} ({baseline['content_type']}): median {fmt_num(baseline['median_views'])} views "
+            f"over {baseline['uploads_sampled']} fetched uploads, subscribers {fmt_num(baseline.get('subscribers'))}"
+        )
+    items = result.get("items") or []
     if items and all(item.get("content_type") == "channel" for item in items):
-        lines += ["", "| # | Channel | Subscribers | Videos | Description |", "|---|---|---|---|---|"]
+        with_activity = any(item.get("activity") for item in items)
+        header = "| # | Channel | Subscribers | Videos |" + (" Last upload | Uploads/30d | Recent median views |" if with_activity else "") + " Description |"
+        lines += ["", header, "|" + "---|" * (header.count("|") - 1)]
         for idx, item in enumerate(items, 1):
             m = item["metrics"]
+            activity_cells = ""
+            if with_activity:
+                a = item.get("activity") or {}
+                recent = fmt_num(a.get("recent_video_median_views"))
+                if a.get("recent_shorts_median_views") is not None:
+                    recent += f" (Shorts {fmt_num(a['recent_shorts_median_views'])})"
+                uploads = a.get("uploads_last_30d", "-")
+                if a and uploads == a.get("sampled_uploads") and uploads >= RSS_FEED_SIZE:
+                    uploads = f"{uploads}+"
+                activity_cells = f" {(a.get('last_upload_at') or '-')[:10]} | {uploads} | {recent} |"
             lines.append(
-                f"| {idx} | [{md_cell(item.get('title'))}]({item.get('url')}) | {fmt_num(m.get('subscribers'))} | {fmt_num(m.get('video_count'))} | {md_cell(truncate(item.get('text'), 60))} |"
+                f"| {idx} | [{md_cell(item.get('title'))}]({item.get('url')}) | {fmt_num(m.get('subscribers'))} | {fmt_num(m.get('video_count'))} |{activity_cells} {md_cell(truncate(item.get('text'), 60))} |"
             )
     elif items:
+        baseline = any(item["metrics"].get("views_vs_channel_median") is not None for item in items)
+        last_header = "vs Ch. median" if baseline else "Views/Subs"
         lines += [
             "",
-            "| # | Title | Channel | Published | Len | Views | Views/day | Like% | Views/Subs |",
+            f"| # | Title | Channel | Published | Len | Views | Views/day | Like% | {last_header} |",
             "|---|---|---|---|---|---|---|---|---|",
         ]
         for idx, item in enumerate(items, 1):
@@ -2026,17 +2169,43 @@ def render_markdown(result: dict[str, Any]) -> str:
             if item.get("published_at_precision") == "approx":
                 published = f"~{published}"
             kind = "" if item.get("content_type") == "video" else f"[{item.get('content_type')}] "
+            ratio = m.get("views_vs_channel_median") if baseline else m.get("views_per_subscriber")
+            channel = f"[{md_cell(item.get('author'))}]({item['author_url']})" if item.get("author_url") else md_cell(item.get("author"))
             lines.append(
-                f"| {idx} | {kind}[{md_cell(truncate(item.get('title'), 60))}]({item.get('url')}) | {md_cell(item.get('author'))} "
+                f"| {idx} | {kind}[{md_cell(truncate(item.get('title'), 60))}]({item.get('url')}) | {channel} "
                 f"({fmt_num(m.get('subscribers'))}) | {published} | {fmt_duration(item.get('duration_seconds'))} | {fmt_num(m.get('views'))} "
-                f"| {fmt_num(m.get('views_per_day'))} | {fmt_num(m.get('like_rate'))} | {f"{m['views_per_subscriber']:.2f}x" if m.get('views_per_subscriber') is not None else '-'} |"
+                f"| {fmt_num(m.get('views_per_day'))} | {fmt_num(m.get('like_rate'))} | {f'{ratio:.2f}x' if ratio is not None else '-'} |"
             )
+    if items and details:
+        lines += ["", "## Details", ""]
+        for idx, item in enumerate(items, 1):
+            lines.append(f"{idx}. **{md_cell(item.get('title'))}** `{item.get('source_id')}`")
+            if item.get("title_localized"):
+                lines.append(f"   - Shown on YouTube as: {item['title_localized']}")
+            if item.get("text"):
+                lines.append(f"   - {truncate(item['text'], 200)}")
+            extras = []
+            if item.get("tags"):
+                extras.append("tags: " + ", ".join(item["tags"][:8]))
+            if len(item.get("found_by_queries") or []) > 1:
+                extras.append("found by: " + " / ".join(item["found_by_queries"]))
+            if item.get("has_transcript") is not None:
+                extras.append(f"transcript: {'yes' if item['has_transcript'] else 'no'}")
+            elif item.get("has_captions"):
+                extras.append("captions: yes")
+            if extras:
+                lines.append("   - " + " ・ ".join(extras))
     if result.get("comments"):
-        lines += ["", "## Comments", ""]
+        lines += ["", "## Comments"]
+        current = None
         for comment in result["comments"]:
+            if comment.get("video_id") != current:
+                current = comment.get("video_id")
+                title = comment.get("video_title")
+                lines += ["", f"### {md_cell(title) + ' ' if title else ''}(https://youtu.be/{current})", ""]
             flags = "".join(flag for flag, on in (("📌", comment.get("is_pinned")), ("🎙", comment.get("author_is_uploader"))) if on)
             replies = f" 💬{comment['reply_count']}" if comment.get("reply_count") else ""
-            lines.append(f"- [{comment.get('video_id')}] 👍{comment.get('like_count') or 0}{replies}{flags} {comment.get('text')}")
+            lines.append(f"- 👍{comment.get('like_count') or 0}{replies}{flags} {comment.get('text')}")
     if result.get("trends"):
         lines += ["", "## Trends", "", "| Seed | Keyword | Score (top: 0-100 / rising: growth) | Rising |", "|---|---|---|---|"]
         for trend in result["trends"]:
@@ -2062,6 +2231,123 @@ def render_markdown(result: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+CSV_ITEM_COLUMNS = [
+    ("rank", lambda i: i.get("rank")),
+    ("content_type", lambda i: i.get("content_type")),
+    ("title", lambda i: i.get("title")),
+    ("url", lambda i: i.get("url")),
+    ("channel", lambda i: i.get("author")),
+    ("channel_url", lambda i: i.get("author_url")),
+    ("subscribers", lambda i: i["metrics"].get("subscribers")),
+    ("published_at", lambda i: i.get("published_at")),
+    ("duration_seconds", lambda i: i.get("duration_seconds")),
+    ("views", lambda i: i["metrics"].get("views")),
+    ("likes", lambda i: i["metrics"].get("likes")),
+    ("comments", lambda i: i["metrics"].get("comments")),
+    ("views_per_day", lambda i: i["metrics"].get("views_per_day")),
+    ("like_rate", lambda i: i["metrics"].get("like_rate")),
+    ("views_per_subscriber", lambda i: i["metrics"].get("views_per_subscriber")),
+    ("views_vs_channel_median", lambda i: i["metrics"].get("views_vs_channel_median")),
+    ("video_count", lambda i: i["metrics"].get("video_count")),
+    ("last_upload_at", lambda i: (i.get("activity") or {}).get("last_upload_at")),
+    ("recent_video_median_views", lambda i: (i.get("activity") or {}).get("recent_video_median_views")),
+    ("found_by_queries", lambda i: " | ".join(i.get("found_by_queries") or [])),
+    ("title_localized", lambda i: i.get("title_localized")),
+    ("description", lambda i: i.get("text")),
+]
+CSV_COMMENT_COLUMNS = ["video_id", "video_title", "like_count", "reply_count", "published_at", "is_pinned", "author_is_uploader", "text"]
+CSV_TREND_COLUMNS = ["seed_query", "keyword", "score", "rising"]
+
+
+def render_csv(result: dict[str, Any]) -> str:
+    """Items if any, otherwise comments, otherwise trends (one table per CSV)."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    if result.get("items"):
+        writer.writerow([name for name, _ in CSV_ITEM_COLUMNS])
+        for item in result["items"]:
+            writer.writerow([getter(item) for _, getter in CSV_ITEM_COLUMNS])
+    elif result.get("comments"):
+        writer.writerow(CSV_COMMENT_COLUMNS)
+        for comment in result["comments"]:
+            writer.writerow([comment.get(name) for name in CSV_COMMENT_COLUMNS])
+    else:
+        writer.writerow(CSV_TREND_COLUMNS)
+        for trend in result.get("trends") or []:
+            writer.writerow([trend.get(name) for name in CSV_TREND_COLUMNS])
+    return buffer.getvalue()
+
+
+def run_render(args: argparse.Namespace) -> dict[str, Any]:
+    """Merge saved result JSON files and re-rank them locally, without new requests."""
+    results = []
+    for path in args.input:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                results.append(json.load(handle))
+        except (OSError, ValueError) as exc:
+            raise SearchError("input_unreadable", f"Could not read {path}: {exc}") from exc
+    merged = dict(results[0])
+    merged["subcommand"] = results[0].get("subcommand") if len(results) == 1 else "render"
+    merged["tool"] = " + ".join(dict.fromkeys(r.get("tool") or "?" for r in results))
+    merged["inputs"] = list(args.input)
+    queries = list(dict.fromkeys(q for r in results for q in (r.get("queries") or ([r["query"]] if r.get("query") else []))))
+    merged["queries"] = queries
+    merged["query"] = " | ".join(queries) or None
+    merged["quota_estimate"] = sum(r.get("quota_estimate") or 0 for r in results)
+    items: dict[str, dict[str, Any]] = {}
+    for r in results:
+        for item in r.get("items") or []:
+            known = items.get(item["source_id"])
+            if known:
+                known["found_by_queries"] = list(dict.fromkeys([*(known.get("found_by_queries") or []), *(item.get("found_by_queries") or [])]))
+            else:
+                items[item["source_id"]] = dict(item)
+    for key in ("comments", "trends", "queries_tried", "limitations", "next_human_actions"):
+        seen: list[Any] = []
+        for r in results:
+            for entry in r.get(key) or []:
+                if entry not in seen:
+                    seen.append(entry)
+        merged[key] = seen
+    kept = []
+    for item in items.values():
+        haystack = f"{item.get('title') or ''} {item.get('text') or ''} {' '.join(item.get('tags') or [])}".lower()
+        if args.exclude and any(term.lower() in haystack for term in args.exclude):
+            continue
+        if args.include and not any(term.lower() in haystack for term in args.include):
+            continue
+        if item.get("content_type") != "channel" and (item["metrics"].get("views") or 0) < args.min_views:
+            continue
+        kept.append(item)
+    if args.sort not in {"auto", "youtube"}:
+        kept.sort(key=SORT_KEYS[args.sort], reverse=True)
+    if args.max_per_channel:
+        counts: Counter[str] = Counter()
+        limited = []
+        for item in kept:
+            channel = item.get("channel_id") or item.get("author") or ""
+            if item.get("content_type") != "channel" and counts[channel] >= args.max_per_channel:
+                continue
+            counts[channel] += 1
+            limited.append(item)
+        kept = limited
+    kept = kept[: args.limit] if args.limit else kept
+    for position, item in enumerate(kept, 1):
+        item["rank"] = position
+    merged["items"] = kept
+    merged["summary"] = {**build_summary(merged, len(items)), **({"channel_baselines": results[0]["summary"]["channel_baselines"]} if len(results) == 1 and (results[0].get("summary") or {}).get("channel_baselines") else {})}
+    if len(results) > 1:
+        merged["limitations"].append(message("merged_results", f"Merged {len(results)} saved results fetched at {', '.join(sorted({r.get('fetched_at') or '?' for r in results}))}; metrics are from each fetch time."))
+    return merged
+
+
+def add_output_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--format", choices=["auto", "json", "markdown", "csv"], default="auto", help="auto: markdown when --output is given, otherwise json")
+    parser.add_argument("--output", help="also write the full JSON to this path")
+    parser.add_argument("--details", action="store_true", help="markdown: add description, tags, matched queries and transcript availability per item")
+
+
 def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--purpose", default="social_marketing_research")
     parser.add_argument("--backend", choices=["auto", "api", "web"], default="auto", help="auto: api if YOUTUBE_API_KEY is set, else web")
@@ -2079,8 +2365,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--sort", choices=SORT_CHOICES, default="auto", help="local ranking after filtering")
     parser.add_argument("--shorts", choices=["exclude", "include", "only"], default="exclude")
     parser.add_argument("--allow-live", action="store_true")
-    parser.add_argument("--format", choices=["json", "markdown"], default="json")
-    parser.add_argument("--output", help="also write JSON to this path")
+    add_output_arguments(parser)
     parser.add_argument("--cookies", help="web: Netscape cookies.txt passed to yt-dlp (helps when YouTube rate-limits)")
 
 
@@ -2088,16 +2373,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
-    diag = subparsers.add_parser("diag")
+    diag = subparsers.add_parser("diag", help="check which routes (API key, web, yt-dlp, RSS) work right now")
     add_common_arguments(diag)
 
-    lookup = subparsers.add_parser("lookup")
+    lookup = subparsers.add_parser("lookup", help="full metadata for video URLs / IDs")
     add_common_arguments(lookup)
     lookup.add_argument("--url", action="append", default=[])
     lookup.add_argument("--id", action="append", default=[])
     lookup.add_argument("--no-deep", action="store_true", help="web: skip yt-dlp (tags, captions, duration)")
 
-    search = subparsers.add_parser("search")
+    search = subparsers.add_parser("search", help="discover videos or channels from keywords")
     add_common_arguments(search)
     search.add_argument("--order", choices=["relevance", "viewCount", "date"], default="relevance")
     search.add_argument("--type", choices=["video", "channel"], default="video")
@@ -2106,25 +2391,40 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--no-enrich", action="store_true", help="web: skip per-video detail enrichment")
     search.add_argument("--deep", action="store_true", help="web: also fetch tags/category/captions/duration via yt-dlp (slower, rate-limit prone)")
     search.add_argument("--enrich-top", type=int, help=f"web: number of pre-filtered candidates to enrich (default max({DEFAULT_ENRICH_CAP}, limit))")
+    search.add_argument("--comments", type=int, default=0, metavar="N", help="also fetch comments for the top N selected videos")
+    search.add_argument("--comments-per-video", type=int, default=10)
+    search.add_argument("--comment-order", choices=["relevance", "time"], default="relevance")
+    search.add_argument("--include-creator-comments", action="store_true")
+    search.add_argument("--no-activity", action="store_true", help="--type channel: skip the RSS check of last upload and recent views")
 
-    channel = subparsers.add_parser("channel")
+    channel = subparsers.add_parser("channel", help="uploads of known channels (@handle, channel URL/ID, or any video URL of the channel)")
     add_common_arguments(channel)
     channel.add_argument("--channels", action="append", required=True)
     channel.add_argument("--deep", action="store_true", help="web: also fetch tags/category/captions via yt-dlp")
 
-    monitor = subparsers.add_parser("monitor")
+    monitor = subparsers.add_parser("monitor", help="latest uploads of known channels via RSS")
     add_common_arguments(monitor)
     monitor.add_argument("--channels", action="append", required=True)
 
-    comments = subparsers.add_parser("comments")
+    comments = subparsers.add_parser("comments", help="representative comments for videos")
     add_common_arguments(comments)
     comments.add_argument("--video-ids", action="append", required=True)
     comments.add_argument("--comment-top-n", type=int, default=5)
     comments.add_argument("--comment-order", choices=["relevance", "time"], default="relevance")
     comments.add_argument("--include-creator-comments", action="store_true", help="web: keep the uploader's own (often pinned promo) comments")
 
-    trends = subparsers.add_parser("trends")
+    trends = subparsers.add_parser("trends", help="related YouTube searches from Google Trends")
     add_common_arguments(trends)
+
+    render = subparsers.add_parser("render", help="re-rank / merge saved result JSON files without new requests")
+    render.add_argument("--input", action="append", required=True, help="saved result JSON (repeatable; items are merged)")
+    render.add_argument("--sort", choices=SORT_CHOICES, default="auto", help="auto keeps the saved order")
+    render.add_argument("--limit", type=int, default=0, help="0 = all")
+    render.add_argument("--min-views", type=int, default=0)
+    render.add_argument("--max-per-channel", type=int, default=0, help="0 = no limit")
+    render.add_argument("--include", action="append", default=[])
+    render.add_argument("--exclude", action="append", default=[])
+    add_output_arguments(render)
 
     return parser
 
@@ -2140,6 +2440,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         "monitor": run_monitor,
         "comments": run_comments,
         "trends": run_trends,
+        "render": run_render,
     }.get(args.subcommand)
     if runner is None:
         raise SearchError("unknown_subcommand", f"Unknown subcommand: {args.subcommand}")
@@ -2150,7 +2451,7 @@ def main(argv: list[str]) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     global COOKIES_FILE
-    COOKIES_FILE = args.cookies
+    COOKIES_FILE = getattr(args, "cookies", None)
     try:
         result = execute(args)
     except SearchError as exc:
@@ -2160,8 +2461,11 @@ def main(argv: list[str]) -> int:
     if args.output:
         with open(args.output, "w", encoding="utf-8") as handle:
             json.dump(result, handle, ensure_ascii=False, indent=2)
-    if args.format == "markdown":
-        print(render_markdown(result))
+    output_format = args.format if args.format != "auto" else ("markdown" if args.output else "json")
+    if output_format == "markdown":
+        print(render_markdown(result, details=args.details))
+    elif output_format == "csv":
+        sys.stdout.write(render_csv(result))
     else:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
