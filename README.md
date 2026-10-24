@@ -29,7 +29,7 @@ python3 .agents/skills/x-search/scripts/search.py search --keywords "生成AI" -
 
 ## 取り込み時の確認
 
-41ファイルの原本とのバイト一致、Python 10ファイルの構文、実行入口4本の `--help`、論文CLIの21ソース一覧を確認。YouTube/X APIのキー未設定時の診断も確認した。外部サービス全機能の実検索は未検証。Python依存は検証用環境へ導入済み。字幕の音声処理用 `ffmpeg` は宣言のみで、このSessionには未導入。
+41ファイルの原本とのバイト一致、Python 10ファイルの構文、実行入口4本の `--help`、論文CLIの21ソース一覧を確認。YouTube/X APIのキー未設定時の診断も確認した。外部サービス全機能の実検索は未検証。Python依存は検証用環境へ導入済み。
 
 2026-09-29に `x-search` をbird実検索で検証・改善した。bird はChromeのx.comログインCookieを自動で使えるため、`AUTH_TOKEN` / `CT0` 未設定でも動く。既定の `--sort top` は `min_faves` 段階検索で期間全体の注目投稿を集める（詳細は `x-search/SKILL.md`）。X API経路（`X_BEARER_TOKEN`）と `graph` は未検証。
 
@@ -40,3 +40,7 @@ Skill簡易validatorは9件合格。原本の `paper-search` のdescription内�
 `youtube-search` はAPIキーなしで動く web バックエンド（YouTubeのInnerTube search/next/player、RSS）を持つ。`YOUTUBE_API_KEY` があれば Data API を使い、クォータ切れ時は web へフォールバックする。複数クエリの統合、ローカル並べ替え（views/day・登録者比など）、Shorts・チャンネル検索、Markdown表出力、自動翻訳タイトルの原題復元を追加した。実検索で確認した制約は SKILL.md の「Facts to Keep in Mind」にある。
 
 2026-09-29（2回目）: リサーチ作業での使い勝手を改善した。`search --comments N`（上位動画のコメントを同時取得）と `--details`、チャンネル検索の活動状況（最終投稿日・30日投稿数・直近の再生数中央値）、`channel` への動画URL入力とチャンネル中央値比 `--sort vs_median`、保存JSONの統合・並べ替え `render`、CSV出力、`--output` 指定時のMarkdown既定表示を追加した。
+
+## OPENAI_API_KEYの撤去（2026-10-25）
+
+`youtube-transcript` のOpenAI音声認識フォールバック（`--asr`）を削除し、`OPENAI_API_KEY`・`openai` パッケージ・`ffmpeg` を [environment.yaml](environment.yaml) から外した。字幕トラック（手動・自動）がある動画だけ文字起こしできる。この変更で `youtube-transcript` の4ファイルは取り込み時の原本と一致しない。

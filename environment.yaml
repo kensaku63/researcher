@@ -6,15 +6,12 @@ config:
     apt:
     - python3
     - jq
-    - ffmpeg
     brew:
     - python
-    - ffmpeg
     - jq
     pip:
     - paper-search-mcp @ git+https://github.com/openags/paper-search-mcp.git
     - yt-dlp
-    - openai
     - requests
     - python-dateutil
     - pydantic
@@ -32,8 +29,6 @@ config:
   - name: YOUTUBE_API_KEY
     purpose: Optional YouTube Data API access for search, video metrics, channel metrics,
       and comments. youtube-search falls back to keyless web endpoints without it.
-  - name: OPENAI_API_KEY
-    purpose: OpenAI speech-to-text fallback for YouTube videos without captions
   - name: AUTH_TOKEN
     purpose: X web cookie auth token for bird CLI. Required with CT0 when using bird
       search, trend, expand, account, or bookmarks.

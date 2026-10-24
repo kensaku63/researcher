@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch YouTube captions or generate a transcript with OpenAI ASR."""
+"""Fetch YouTube caption tracks as a transcript."""
 
 from __future__ import annotations
 
@@ -7,20 +7,14 @@ import argparse
 import datetime as dt
 import html
 import json
-import os
 import re
-import shutil
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
 FORMAT_PRIORITY = ["vtt", "srt", "ttml", "srv3", "srv2", "srv1", "json3", "json"]
-MAX_ASR_BYTES = 25 * 1024 * 1024
-SAFE_ASR_BYTES = 24 * 1024 * 1024
 
 
 class TranscriptError(RuntimeError):
@@ -291,92 +285,12 @@ def build_metadata(info: dict[str, Any], video_id: str, url: str) -> dict[str, A
     }
 
 
-def download_audio(url: str, temp_dir: Path) -> Path:
-    YoutubeDL = load_yt_dlp()
-    outtmpl = str(temp_dir / "%(id)s.%(ext)s")
-    ydl = YoutubeDL(
-        {
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "format": "bestaudio[ext=m4a]/bestaudio/best",
-            "outtmpl": outtmpl,
-        }
-    )
-    try:
-        info = ydl.extract_info(url, download=True)
-    except Exception as exc:  # noqa: BLE001
-        raise TranscriptError(f"Could not download audio for ASR: {exc}") from exc
-    expected = Path(ydl.prepare_filename(info))
-    if expected.exists():
-        return expected
-    files = sorted(temp_dir.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if files:
-        return files[0]
-    raise TranscriptError("Audio download finished but no audio file was found.")
-
-
-def compress_audio_if_needed(path: Path, temp_dir: Path) -> Path:
-    if path.stat().st_size <= SAFE_ASR_BYTES:
-        return path
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        raise TranscriptError(
-            "Downloaded audio is over 25 MB and ffmpeg is unavailable for compression."
-        )
-    output = temp_dir / f"{path.stem}.asr.mp3"
-    cmd = [
-        ffmpeg,
-        "-y",
-        "-i",
-        str(path),
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-b:a",
-        "48k",
-        str(output),
-    ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if output.stat().st_size > MAX_ASR_BYTES:
-        raise TranscriptError("Audio remains over 25 MB after compression; split it manually.")
-    return output
-
-
-def generate_asr(url: str, model: str, language: str | None) -> list[dict[str, Any]]:
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise TranscriptError("OPENAI_API_KEY is required for ASR fallback.")
-    try:
-        from openai import OpenAI  # type: ignore
-    except ImportError as exc:
-        raise TranscriptError("The OpenAI Python SDK is required for ASR fallback.") from exc
-
-    with tempfile.TemporaryDirectory(prefix="youtube-asr-") as tmp:
-        temp_dir = Path(tmp)
-        audio_path = compress_audio_if_needed(download_audio(url, temp_dir), temp_dir)
-        client = OpenAI()
-        with audio_path.open("rb") as audio_file:
-            kwargs: dict[str, Any] = {
-                "model": model,
-                "file": audio_file,
-                "response_format": "text",
-            }
-            if language:
-                kwargs["language"] = language
-            response = client.audio.transcriptions.create(**kwargs)
-    text = response if isinstance(response, str) else getattr(response, "text", str(response))
-    text = clean_caption_text(text)
-    return [{"start": None, "end": None, "text": text}] if text else []
-
-
 def build_transcript(args: argparse.Namespace) -> dict[str, Any]:
     video_id, url = normalize_video_input(args.video)
     ydl, info = extract_info(url)
     metadata = build_metadata(info, video_id, url)
     patterns = parse_lang_patterns(args.langs)
-    selected = None if args.asr == "always" else choose_caption(info, patterns)
+    selected = choose_caption(info, patterns)
     source = "none"
     language = None
     track_ext = None
@@ -388,18 +302,12 @@ def build_transcript(args: argparse.Namespace) -> dict[str, Any]:
         raw = fetch_caption_bytes(ydl, track["url"])
         segments = parse_caption(raw, track_ext or "")
 
-    if args.asr == "always" or (not segments and args.asr == "fallback"):
-        source = "asr"
-        language = args.asr_language
-        track_ext = "text"
-        segments = generate_asr(url, args.asr_model, args.asr_language)
-
     if not segments:
         raise TranscriptError(
-            "No usable transcript was found. Try another language pattern or run with --asr fallback."
+            "No usable transcript was found. Try another language pattern."
         )
 
-    text = transcript_text(segments, include_timestamps=args.timestamps and source != "asr")
+    text = transcript_text(segments, include_timestamps=args.timestamps)
     return {
         "metadata": metadata,
         "source": source,
@@ -459,9 +367,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--langs", default="ja,en.*,en", help="Comma-separated language patterns")
     parser.add_argument("--format", choices=["markdown", "json", "text"], default="markdown")
     parser.add_argument("--output-dir", help="Directory for the rendered transcript")
-    parser.add_argument("--asr", choices=["never", "fallback", "always"], default="never")
-    parser.add_argument("--asr-model", default="gpt-4o-transcribe")
-    parser.add_argument("--asr-language", help="Optional ISO language hint for ASR")
     parser.add_argument("--no-timestamps", action="store_false", dest="timestamps")
     parser.set_defaults(timestamps=True)
     return parser.parse_args(argv)
