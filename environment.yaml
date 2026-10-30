@@ -20,6 +20,8 @@ config:
     npm:
     - "@steipete/bird"
   env:
+  - name: GEMINI_API_KEY
+    purpose: Gemini embedding API for question maps Japanese coordinate evaluation
   - name: PAPER_SEARCH_MCP_UNPAYWALL_EMAIL
     purpose: Unpaywall API courtesy email (improves OA / fulltext detection)
   - name: PAPER_SEARCH_MCP_CORE_API_KEY
