@@ -17,6 +17,12 @@ config:
     - pydantic
     - google-api-python-client
     - pytrends
+    - numpy
+    - scipy
+    - scikit-learn
+    - umap-learn
+    - tensorflow
+    - matplotlib
     npm:
     - "@steipete/bird"
   env:
