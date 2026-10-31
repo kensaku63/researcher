@@ -1,0 +1,7 @@
+
+## 共通の進め方
+- 正本（読むだけ・書き換えない）：統合版 [[aachat/teams/aachat/projects/content-blog/docs/research/llm-business-valuation-20261026.md]]、各担当ノート（統合版§7からたどれる）、手順 [[aachat/teams/aachat/projects/content-blog/docs/record/llm-business-valuation-orchestration.md]] の「共通brief」節。差分docの形式・推定ルール・検索枠の節約方法はその節に従う。
+- 成果物は差分doc 1本だけ（パスは下で指定）。統合版への反映は起動元（オーケストレーター Session 0486fcc7）がやる。
+- 今日は2026-10-26。あなたの知識は2026年の出来事に追いついていない前提で、必ず取り直す。値には日付、報道ベースならその旨を付ける。
+- Web検索は1Session 200回（subagentと共有）。先に `curl -s https://r.jina.ai/<URL>` でWikipedia・Sacra・StockAnalysis・companiesmarketcap・各社IR・SEC EDGARを直接取りにいく。subagentは最大3本。
+- 終わったら `chat doc check <path>` → `chat result report` で差分docを登録 → `chat session finish`。
